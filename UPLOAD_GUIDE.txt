@@ -1,0 +1,23 @@
+AI 가맹점 이탈 징후 분석 업데이트 - GitHub 웹에서 적용
+
+중요: 연결 도구에서 GitHub 파일 쓰기가 403으로 거부될 수 있습니다. 이 ZIP은 저장소에 자동 반영되지 않으며, GitHub 웹 편집기에서 파일 내용을 직접 반영해야 합니다. 원본 XLSX는 ZIP에 포함하지 않았고 그대로 유지하세요.
+
+가장 쉬운 방법(로컬 실행 불필요):
+1. GitHub에서 https://github.dev/snowyMountain98/merchant-retention-dashboard 를 엽니다. 또는 저장소 화면에서 키보드의 . (마침표)를 누릅니다.
+2. Explorer에서 기존 파일을 아래 경로별로 열고 ZIP 속 대응 파일의 전체 내용으로 교체합니다. 새 파일은 해당 경로로 생성합니다.
+   - 기존 교체: requirements.txt
+   - 기존 교체: .github/workflows/analyze.yml
+   - 기존 교체: src/analysis/build_dashboard.py
+   - 기존 교체: assets/js/dashboard.js
+   - 기존 교체: index.html
+   - 기존 교체: README.md
+   - 새 파일: tests/test_ai_scoring.py
+3. Source Control 아이콘을 열고 변경 파일들을 Stage한 후 커밋 메시지 `Add AI merchant anomaly detection`을 입력하고 Commit & Push를 진행합니다.
+4. GitHub.dev가 main으로 직접 push할 수 없다고 표시하면 새 브랜치를 만들고 push한 뒤 GitHub에서 Pull Request를 생성/병합하세요.
+5. Repository > Settings > Pages > Build and deployment > Source가 `GitHub Actions`인지 확인합니다.
+6. https://github.com/snowyMountain98/merchant-retention-dashboard/actions 에서 `AI Merchant Retention Analysis and Deploy` 실행을 확인합니다.
+7. 성공하면 https://snowymountain98.github.io/merchant-retention-dashboard/ 를 엽니다.
+
+커밋을 다시 거부하면 오류 문구나 화면 캡처를 확인해야 원인을 구분할 수 있습니다. 자주 있는 원인은 branch protection, 인증/권한, 동시 편집 충돌, 저장소 정책입니다.
+
+AI 모델은 IsolationForest 비지도 이상징후 탐지입니다. 검증된 이탈 확률이 아니며, 실제 해지 라벨을 확보하면 다음 단계로 감독학습 모델을 검토할 수 있습니다.

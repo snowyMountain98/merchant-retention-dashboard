@@ -1,43 +1,33 @@
-# 가맹점 이탈 방지 대시보드 (MVP)
+# AI 가맹점 이탈 징후 대시보드
 
-정산 집계 데이터를 이용해 가맹점별 거래 추이와 이탈 위험 신호를 살펴보는 초기 프로젝트입니다. 현재 포함된 CSV/JSON은 모두 가상의 시연 데이터입니다.
+GitHub Actions가 저장소 루트의 `스타플랫폼거래집계.xlsx`를 읽기 전용으로 처리하고, 가맹점별 월간 분석 결과를 생성한 뒤 GitHub Pages에 배포합니다. 원본 엑셀 파일은 수정하거나 덮어쓰지 않습니다.
 
-## 보안 주의사항
+## AI 분석 방식
 
-- 실제 정산 파일, 기업명·가맹점명·식별번호 및 실제 분석 결과를 저장소에 커밋하지 마세요.
-- 이 저장소가 Public이면 실제 정산 데이터가 절대 올라가면 안 됩니다. 공개 저장소는 샘플/가상 데이터와 코드만 포함하세요.
-- 비공개 저장소도 회사의 데이터 반출 및 외부 처리 승인을 대신하지 않습니다.
-- 승인금액·취소금액·부분취소금액을 임의로 순매출/정산금액으로 정의하지 마세요. 업무 산정 기준을 데이터 소유 부서에 확인해야 합니다.
-- 현재 위험 점수는 개발용 규칙 기반 휴리스틱이며 검증된 이탈 확률이 아닙니다.
+- 비지도 머신러닝 `IsolationForest`를 사용해 가맹점 월별 이력에서 드문 하락·거래 공백 패턴을 탐지합니다.
+- 입력 특징: 승인금액 감소율, 승인건수 감소율, 직전 3개월 평균 대비 하락률, 마지막 관측 거래 이후 일수, 취소금액/승인금액 비율, 부분취소 비율, 연속 하락 횟수.
+- AI 이상징후 점수는 모델 참조 분포에 대한 상대적 순위(0~100)입니다. **이탈 확률이 아닙니다.** 실제 이탈/해지 여부의 라벨이 없으므로 결과는 위험 신호 후보로 보고 사람이 검토해야 합니다.
+- HIGH / MEDIUM 등급은 초기 운영 기준이며, 과거 이탈 결과와 담당자 피드백을 축적해 검증·보정해야 합니다.
+- 최신 집계월에 행이 없는 가맹점은 실제 미거래인지 데이터 누락인지 단정하지 않고 `UNKNOWN/확인 필요`로 표시합니다.
 
-## 로컬 실행
+## 원본 데이터
 
-Python 3.12 권장.
+- 파일: `스타플랫폼거래집계.xlsx` (저장소 루트)
+- 스크립트는 원본을 읽기만 합니다. 마스킹, 컬럼명 변경, 원본 재저장은 수행하지 않습니다.
+- 승인금액, 취소금액, 부분취소금액은 각각 별도 지표로 보존합니다. 순매출/정산금액을 임의로 계산하지 않습니다.
+- 공개 저장소와 GitHub Pages에는 마스킹 데이터 및 가맹점별 AI 분석 결과가 공개됩니다. 사용자가 공개 가능한 데이터임을 확인한 경우에만 이 구성을 사용하세요.
 
-```bash
-python -m venv .venv
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-python -m pytest -q
-python -m http.server 8000
-```
+## GitHub 설정
 
-브라우저에서 `http://localhost:8000`을 엽니다. 정적 화면은 `public-data/sample_summary.json`의 합성 데이터만 사용합니다.
+1. Repository > **Settings > Pages > Build and deployment > Source**를 `GitHub Actions`로 설정합니다.
+2. `requirements.txt`, `src/analysis/build_dashboard.py`, `tests/test_ai_scoring.py`, `.github/workflows/analyze.yml`, `index.html`, `assets/js/dashboard.js`를 커밋합니다.
+3. **Actions**에서 `AI Merchant Retention Analysis and Deploy`의 성공 여부를 확인합니다.
+4. 사이트: https://snowymountain98.github.io/merchant-retention-dashboard/
 
-## 엑셀 검증 (승인된 로컬 환경에서만)
+워크플로는 Pages 산출물용 `site/` 디렉터리만 업로드하며 원본 엑셀 파일을 산출물에 복사하지 않습니다. 다만 저장소 자체가 Public이면 원본 파일은 저장소에서 공개 접근할 수 있습니다.
 
-원본 파일은 저장소 밖의 승인된 경로에 두고 실행합니다.
+## 개발 한계
 
-```bash
-python -m src.analysis.validate_data --input "C:/approved-path/settlement.xlsx"
-```
-
-## 초기 컬럼 가정
-
-`config/column_mapping.example.json`은 대화에서 확인한 컬럼명을 토대로 한 예시입니다. 실제 엑셀의 시트명, 컬럼 정의, 날짜 포맷 및 금액 단위는 데이터 소유 부서와 확인한 뒤 사용하세요.
-
-## 배포
-
-GitHub Pages에는 합성 데이터만 배포하세요. 실제 가맹점별 위험 결과와 관리 이력에는 승인된 내부 웹 환경, 인증, 접근통제, 감사로그 및 중앙 저장소가 필요합니다.
+- 현재 모델은 이탈 라벨을 이용해 학습한 분류 모델이 아닙니다. 이탈 확률이나 확정 판정으로 해석하지 마세요.
+- 제대로 된 이탈 예측을 원하면 해지일/이탈 여부와 예측 기준일을 포함한 과거 라벨 데이터가 필요합니다. 그 경우 시간 순서에 따른 학습·검증과 정밀도/재현율 평가를 추가합니다.
+- 관리 이력 중앙 저장과 사용자 인증은 GitHub Pages만으로 제공되지 않습니다. 여러 담당자가 실제 이력을 관리하려면 승인된 백엔드/DB를 연결해야 합니다.
