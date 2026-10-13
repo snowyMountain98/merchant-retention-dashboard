@@ -1,0 +1,21 @@
+{
+  "description": "예시 매핑입니다. 데이터 소유 부서와 정의를 확인한 후 변경하세요.",
+  "sheet_name": "Sheet1",
+  "columns": {
+    "merchant_id": "스타플랫폼가맹점번호",
+    "merchant_name": "가맹점명",
+    "base_month": "집계년월",
+    "base_date": "집계년월일",
+    "service_type": "서비스유형",
+    "payment_method": "결제수단",
+    "financial_company": "금융회사",
+    "channel": "결제채널",
+    "payment_type": "스타플랫폼결제종류구분",
+    "approval_count": "승인건수",
+    "approval_amount": "승인금액",
+    "cancel_count": "취소건수",
+    "cancel_amount": "취소금액",
+    "partial_cancel_count": "부분취소건수",
+    "partial_cancel_amount": "부분취소금액"
+  }
+}

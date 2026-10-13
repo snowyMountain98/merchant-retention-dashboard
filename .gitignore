@@ -1,0 +1,16 @@
+# Python environments and caches
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Credentials / local settings
+.env
+.env.*
+!.env.example
+
+# Real settlement workbooks and raw data (never commit these)
+*.xlsx
+*.xls
+data/raw/
+data/processed/

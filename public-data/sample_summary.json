@@ -1,0 +1,44 @@
+{
+  "analysis_month": "2026-09",
+  "generated_at": "2026-10-13T09:00:00+09:00",
+  "notice": "합성 시연 데이터이며 실제 가맹점 정보가 아닙니다.",
+  "summary": {
+    "merchant_count": 2,
+    "high_risk_count": 1,
+    "medium_risk_count": 0,
+    "low_risk_count": 1
+  },
+  "monthly_sales": [
+    {
+      "month": "2026-08",
+      "approval_amount": 1100000
+    },
+    {
+      "month": "2026-09",
+      "approval_amount": 1320000
+    }
+  ],
+  "merchants": [
+    {
+      "merchant_id": "SAMPLE001",
+      "risk_score": 82,
+      "risk_level": "HIGH",
+      "sales_change_rate": -35.0,
+      "transaction_change_rate": -28.0,
+      "inactive_days": 16,
+      "risk_reasons": [
+        "샘플: 매출 감소",
+        "샘플: 거래 공백"
+      ]
+    },
+    {
+      "merchant_id": "SAMPLE002",
+      "risk_score": 10,
+      "risk_level": "LOW",
+      "sales_change_rate": -10.0,
+      "transaction_change_rate": -10.0,
+      "inactive_days": 1,
+      "risk_reasons": []
+    }
+  ]
+}
