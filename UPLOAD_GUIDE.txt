@@ -1,23 +1,40 @@
-AI 가맹점 이탈 징후 분석 업데이트 - GitHub 웹에서 적용
+기업별 메인 화면 + 기업/가맹점 상세 화면 적용 가이드
 
-중요: 연결 도구에서 GitHub 파일 쓰기가 403으로 거부될 수 있습니다. 이 ZIP은 저장소에 자동 반영되지 않으며, GitHub 웹 편집기에서 파일 내용을 직접 반영해야 합니다. 원본 XLSX는 ZIP에 포함하지 않았고 그대로 유지하세요.
+적용 파일
+- index.html: 메인, 기업별 요약/검색/위험 등급
+- company.html: 기업 선택 후 소속 가맹점 목록/요약/기업 월별 추이
+- merchant-detail.html: 가맹점 상세, 월별 승인/취소/부분취소 추이, AI 분석 근거
+- assets/css/style.css, assets/js/*.js
+- src/analysis/build_dashboard.py: 기업관리번호/기업명 및 가맹점별 12개월 이력 생성
+- .github/workflows/analyze.yml: 새 HTML 페이지들을 Pages 산출물에 포함
+- tests/test_enterprise_grouping.py: 기업/가맹점 계층 데이터 테스트
+- README.md
 
-가장 쉬운 방법(로컬 실행 불필요):
-1. GitHub에서 https://github.dev/snowyMountain98/merchant-retention-dashboard 를 엽니다. 또는 저장소 화면에서 키보드의 . (마침표)를 누릅니다.
-2. Explorer에서 기존 파일을 아래 경로별로 열고 ZIP 속 대응 파일의 전체 내용으로 교체합니다. 새 파일은 해당 경로로 생성합니다.
-   - 기존 교체: requirements.txt
-   - 기존 교체: .github/workflows/analyze.yml
-   - 기존 교체: src/analysis/build_dashboard.py
-   - 기존 교체: assets/js/dashboard.js
-   - 기존 교체: index.html
-   - 기존 교체: README.md
-   - 새 파일: tests/test_ai_scoring.py
-3. Source Control 아이콘을 열고 변경 파일들을 Stage한 후 커밋 메시지 `Add AI merchant anomaly detection`을 입력하고 Commit & Push를 진행합니다.
-4. GitHub.dev가 main으로 직접 push할 수 없다고 표시하면 새 브랜치를 만들고 push한 뒤 GitHub에서 Pull Request를 생성/병합하세요.
-5. Repository > Settings > Pages > Build and deployment > Source가 `GitHub Actions`인지 확인합니다.
-6. https://github.com/snowyMountain98/merchant-retention-dashboard/actions 에서 `AI Merchant Retention Analysis and Deploy` 실행을 확인합니다.
-7. 성공하면 https://snowymountain98.github.io/merchant-retention-dashboard/ 를 엽니다.
+GitHub에서 반영하는 방법 (로컬 실행 불필요)
+1. https://github.dev/snowyMountain98/merchant-retention-dashboard 열기
+2. 이 ZIP을 PC에서 압축 해제합니다.
+3. 아래 파일은 기존 경로의 파일 내용을 교체합니다.
+   index.html
+   assets/css/style.css
+   assets/js/dashboard.js
+   src/analysis/build_dashboard.py
+   .github/workflows/analyze.yml
+   README.md
+4. 아래는 새 파일로 추가합니다.
+   company.html
+   merchant-detail.html
+   assets/js/company-detail.js
+   assets/js/merchant-detail.js
+   tests/test_enterprise_grouping.py
+5. Source Control에서 변경 파일을 Stage하고 커밋합니다.
+6. main 직접 커밋이 거부되면 ai-company-detail 같은 새 브랜치에서 커밋하고 Pull Request를 생성해 main에 병합합니다.
+7. Settings > Pages > Build and deployment의 Source가 GitHub Actions인지 확인합니다.
+8. Actions 탭에서 "AI Merchant Retention Analysis and Deploy" 실행이 성공했는지 확인합니다.
+9. 사이트: https://snowymountain98.github.io/merchant-retention-dashboard/
 
-커밋을 다시 거부하면 오류 문구나 화면 캡처를 확인해야 원인을 구분할 수 있습니다. 자주 있는 원인은 branch protection, 인증/권한, 동시 편집 충돌, 저장소 정책입니다.
-
-AI 모델은 IsolationForest 비지도 이상징후 탐지입니다. 검증된 이탈 확률이 아니며, 실제 해지 라벨을 확보하면 다음 단계로 감독학습 모델을 검토할 수 있습니다.
+중요
+- 이 ZIP에는 실제 정산 엑셀 파일이 포함되어 있지 않습니다. 저장소에 이미 업로드된 원본 엑셀을 분석 입력으로 읽습니다.
+- 원본 엑셀 파일은 읽기 전용입니다. 스크립트는 원본을 수정/저장하지 않습니다.
+- Pages 산출물에는 index/company/merchant-detail 화면, 정적 자산 및 dashboard_summary.json만 복사하며 원본 XLSX는 복사하지 않습니다.
+- 회사명 중복이 있을 수 있으므로 기업 식별 키는 기업관리번호입니다.
+- Isolation Forest 점수는 이상징후 상대 점수이지 실제 이탈 확률이 아닙니다.

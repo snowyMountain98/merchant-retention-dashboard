@@ -47,9 +47,12 @@ jobs:
           rm -rf site
           mkdir -p site/public-data
           cp index.html site/index.html
+          cp company.html site/company.html
+          cp merchant-detail.html site/merchant-detail.html
           cp -r assets site/assets
           cp public-data/dashboard_summary.json site/public-data/dashboard_summary.json
           test ! -e site/스타플랫폼거래집계.xlsx
+          test ! -e site/data/raw
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
