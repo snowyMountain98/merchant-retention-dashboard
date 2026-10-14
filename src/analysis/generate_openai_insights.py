@@ -17,6 +17,7 @@ from typing import Any, Callable
 DEFAULT_MODEL = "gpt-5.6-luna"
 COMPANY_BATCH_SIZE = 20
 MERCHANT_BATCH_SIZE = 25
+MAX_RETRIES_FOR_EMPTY_OUTPUT = 1
 
 PORTFOLIO_SCHEMA = {
     "type": "object",
@@ -246,24 +247,73 @@ def _format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     return {"type": "json_schema", "name": name, "strict": True, "schema": schema}
 
 
+def _response_diagnostic(response: Any) -> str:
+    """Summarize response metadata without logging prompts or response content."""
+    status = getattr(response, "status", None) or "unknown"
+    incomplete = getattr(response, "incomplete_details", None)
+    if incomplete is not None:
+        if hasattr(incomplete, "model_dump"):
+            incomplete = incomplete.model_dump(exclude_none=True)
+        elif not isinstance(incomplete, (str, int, float, bool, dict, list)):
+            incomplete = str(incomplete)
+    output_types = []
+    refusal_seen = False
+    for item in (getattr(response, "output", None) or []):
+        item_type = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else "unknown")
+        content = getattr(item, "content", None) or (item.get("content", []) if isinstance(item, dict) else [])
+        content_types = []
+        for block in content or []:
+            block_type = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else "unknown")
+            content_types.append(block_type)
+            if block_type == "refusal":
+                refusal_seen = True
+        output_types.append({"type": item_type, "content_types": content_types})
+    usage = getattr(response, "usage", None)
+    output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
+    safe = {"status": status, "incomplete_details": incomplete, "output_items": output_types,
+            "refusal_present": refusal_seen, "output_tokens": output_tokens}
+    return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+
+
 def call_structured(client: Any, model: str, instructions: str, payload: Any, schema_name: str, schema: dict[str, Any], max_output_tokens: int = 5000) -> dict[str, Any]:
-    response = client.responses.create(
-        model=model,
-        instructions=instructions,
-        input=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-        text={"format": _format(schema_name, schema)},
-        max_output_tokens=max_output_tokens,
-    )
-    raw = getattr(response, "output_text", None)
-    if not raw:
-        raise RuntimeError(f"OpenAI 응답에 output_text가 없습니다 (schema={schema_name}).")
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"OpenAI 구조화 응답 JSON을 파싱하지 못했습니다 (schema={schema_name}).") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError(f"OpenAI 응답이 JSON 객체가 아닙니다 (schema={schema_name}).")
-    return value
+    """Request a strict JSON object. Use low reasoning for short batch summaries.
+
+    When the model returns an incomplete/empty JSON response, retry once with a
+    larger output budget. Diagnostics intentionally omit prompts, source data,
+    generated text and credentials.
+    """
+    serialized_input = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    token_budget = max_output_tokens
+    last_error = None
+    for attempt in range(MAX_RETRIES_FOR_EMPTY_OUTPUT + 1):
+        response = client.responses.create(
+            model=model,
+            instructions=instructions,
+            input=serialized_input,
+            text={"format": _format(schema_name, schema), "verbosity": "low"},
+            reasoning={"effort": "low"},
+            max_output_tokens=token_budget,
+        )
+        raw = getattr(response, "output_text", None)
+        diagnostic = _response_diagnostic(response)
+        if not raw:
+            last_error = RuntimeError(f"OpenAI 응답 텍스트가 비어 있습니다 (schema={schema_name}, attempt={attempt + 1}, response={diagnostic}).")
+        else:
+            try:
+                value = json.loads(raw)
+            except json.JSONDecodeError:
+                last_error = RuntimeError(f"OpenAI JSON 응답을 파싱하지 못했습니다 (schema={schema_name}, chars={len(raw)}, attempt={attempt + 1}, response={diagnostic}).")
+            else:
+                if not isinstance(value, dict):
+                    last_error = RuntimeError(f"OpenAI 응답이 JSON 객체가 아닙니다 (schema={schema_name}, response={diagnostic}).")
+                else:
+                    return value
+        refusal_present = '"refusal_present":true' in str(diagnostic).replace(" ", "")
+        if attempt >= MAX_RETRIES_FOR_EMPTY_OUTPUT or refusal_present:
+            raise last_error
+        token_budget = min(token_budget * 2, 24000)
+        print(f"OpenAI 응답 형식/길이 문제로 1회 재시도 | schema={schema_name} | response={diagnostic}")
+    raise last_error or RuntimeError(f"OpenAI 응답 생성 실패 (schema={schema_name}).")
 
 
 def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
@@ -279,7 +329,8 @@ def generate_insights(data: dict[str, Any], client: Any, model: str, call: Calla
         "수치 계산을 새로 하지 말고 입력된 수치만 인용하세요. 위험 점수를 이탈 확률이라고 표현하지 마세요. "
         "권고는 담당자가 확인할 수 있는 구체적이고 현실적인 행동이어야 하며, 고객에게 자동으로 연락했다고 주장하지 마세요."
     )
-    portfolio = call(client, model, portfolio_instructions, portfolio_payload, "portfolio_insight", PORTFOLIO_SCHEMA, 1800)
+    print("OpenAI 인사이트 요청 | 범위=전체 포트폴리오")
+    portfolio = call(client, model, portfolio_instructions, portfolio_payload, "portfolio_insight", PORTFOLIO_SCHEMA, 3000)
     data["openai_portfolio_insight"] = portfolio
 
     company_batches, company_ref_to_id = build_company_payloads(data)
@@ -290,8 +341,12 @@ def generate_insights(data: dict[str, Any], client: Any, model: str, call: Calla
         "recommended_actions는 최대 3개, observations는 최대 3개로 간결하게 작성하세요."
     )
     company_insights: dict[str, Any] = {}
-    for batch in company_batches:
-        result = call(client, model, company_instructions, {"companies": batch}, "company_insights", COMPANY_BATCH_SCHEMA, 5000)
+    for batch_index, batch in enumerate(company_batches, start=1):
+        print(f"OpenAI 인사이트 요청 | 범위=기업 | batch={batch_index}/{len(company_batches)} | items={len(batch)}")
+        try:
+            result = call(client, model, company_instructions, {"companies": batch}, "company_insights", COMPANY_BATCH_SCHEMA, 7000)
+        except Exception as exc:
+            raise RuntimeError(f"기업 인사이트 배치 {batch_index}/{len(company_batches)} 실패: {exc}") from exc
         for item in result.get("items", []):
             ref = item.get("ref")
             if ref in company_ref_to_id:
@@ -312,8 +367,12 @@ def generate_insights(data: dict[str, Any], client: Any, model: str, call: Calla
         "수익 회복이나 이탈 방지를 보장하지 말고, 고객에게 연락을 이미 했다고 쓰지 마세요. 위험 점수는 이탈 확률이 아닙니다."
     )
     merchant_insights: dict[tuple[str, str], Any] = {}
-    for batch in merchant_batches:
-        result = call(client, model, merchant_instructions, {"merchants": batch}, "merchant_insights", MERCHANT_BATCH_SCHEMA, 6000)
+    for batch_index, batch in enumerate(merchant_batches, start=1):
+        print(f"OpenAI 인사이트 요청 | 범위=가맹점 | batch={batch_index}/{len(merchant_batches)} | items={len(batch)}")
+        try:
+            result = call(client, model, merchant_instructions, {"merchants": batch}, "merchant_insights", MERCHANT_BATCH_SCHEMA, 8000)
+        except Exception as exc:
+            raise RuntimeError(f"가맹점 인사이트 배치 {batch_index}/{len(merchant_batches)} 실패: {exc}") from exc
         for item in result.get("items", []):
             ref = item.get("ref")
             if ref in merchant_ref_to_key:
@@ -369,7 +428,13 @@ def main() -> None:
         if error_code:
             details.append(f"code={str(error_code)[:80]}")
         suffix = f" [{', '.join(details)}]" if details else ""
-        raise SystemExit(f"OpenAI 인사이트 생성 실패 ({type(exc).__name__}){suffix}. Secret 이름, 모델 접근 권한, API 사용량/결제 설정을 확인하세요.") from exc
+        # Our own RuntimeError messages contain only schema/batch/response metadata,
+        # never prompts, merchant identifiers, generated text, or API credentials.
+        safe_reason = str(exc)[:1200] if isinstance(exc, RuntimeError) else ""
+        reason_suffix = f" | detail={safe_reason}" if safe_reason else ""
+        request_id = getattr(exc, "request_id", None)
+        request_suffix = f" | request_id={str(request_id)[:100]}" if request_id else ""
+        raise SystemExit(f"OpenAI 인사이트 생성 실패 ({type(exc).__name__}){suffix}{request_suffix}{reason_suffix}. OPENAI_API_KEY, 모델 접근 권한, 응답 상태 및 API 사용량/결제 설정을 확인하세요.") from exc
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp = output_path.with_suffix(output_path.suffix + ".tmp")

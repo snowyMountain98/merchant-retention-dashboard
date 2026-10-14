@@ -1,0 +1,24 @@
+OpenAI Actions failure fix
+
+Failure diagnosis from the Actions log:
+- Base settlement workbook analysis completed successfully.
+- The existing unit tests passed.
+- The step "Generate OpenAI business and merchant insights" failed.
+- The old error handler printed only RuntimeError, hiding its own safe diagnostic message. The actual reason cannot be confirmed from that run alone.
+
+Apply only this patch file first:
+1. Replace src/analysis/generate_openai_insights.py with the same path from this ZIP.
+2. Add tests/test_openai_retry_diagnostics.py.
+3. Commit both changes to a branch and push, then merge / push to main as your repository allows.
+4. Open GitHub Actions and inspect the new step log.
+
+What this patch changes:
+- Uses low reasoning effort and low verbosity for brief JSON summaries.
+- If the API response is empty or invalid JSON, retries once with a larger output-token budget.
+- Prints response status, incomplete reason, content types, and output token count without logging prompts, response text, credentials, or merchant/company identifiers.
+- Logs which portfolio/company/merchant batch was running.
+- Prints safe RuntimeError details so a future failure identifies its actual cause.
+
+Model ID remains gpt-5.6-luna. OpenAI's current model page lists this model as supporting the Responses API, structured outputs, and reasoning.effort low. If the new error includes HTTP 401/403/429, check key/project permissions, model access, quota and billing. If it reports incomplete output, the retry should help; the response status will reveal whether the problem remains.
+
+Security: The analysis JSON currently becomes public site data in GitHub Pages. Only use that deployment mode for data/metrics you are authorized to publish.
