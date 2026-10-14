@@ -1,9 +1,8 @@
-"""Generate enterprise-level OpenAI insights only (no merchant-level prompts).
+"""Generate enterprise-level OpenAI insights with same-month community evidence.
 
-The API receives company-level aggregates and, only for enterprise ID 1999, Naver
-News evidence already fetched by generate_naver_evidence.py. Enterprise IDs and
-names are replaced with opaque refs in the prompt. The original workbook is never
-read or modified here.
+Only enterprise-level aggregates are sent to OpenAI. Only enterprise ID 1999
+receives its permitted Starbucks-related NAVER evidence. The workbook is never
+read or modified here; individual merchant records are not included in prompts.
 """
 from __future__ import annotations
 
@@ -16,6 +15,7 @@ from typing import Any, Callable
 
 DEFAULT_MODEL = "gpt-5.6-luna"
 COMPANY_BATCH_SIZE = 8
+MIN_ABS_CHANGE_PCT_FOR_CAUSE_ANALYSIS = 10.0
 
 PORTFOLIO_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -105,31 +105,46 @@ def _sales_history(rows: Any, limit: int = 12) -> list[dict[str, Any]]:
 
 
 def _clean_evidence(evidence: Any) -> list[dict[str, Any]]:
+    """Pass only >=10%-change months and preserve source labels for grounded analysis."""
     if not isinstance(evidence, dict):
         return []
     result = []
     for month in evidence.get("months", []):
-        if not isinstance(month, dict) or month.get("direction") == "UNCHANGED":
+        if not isinstance(month, dict):
             continue
+        if month.get("direction") == "UNCHANGED":
+            continue
+        if month.get("analysis_eligible") is False:
+            continue
+        change_pct = _num(month.get("change_rate_pct"))
+        if change_pct is None or abs(float(change_pct)) < MIN_ABS_CHANGE_PCT_FOR_CAUSE_ANALYSIS:
+            continue
+
         sources = []
-        for item in month.get("results", [])[:8]:
+        for item in month.get("results", [])[:12]:
             if not isinstance(item, dict):
                 continue
             sources.append({
                 "evidence_id": str(item.get("evidence_id", "")),
+                "source_type": str(item.get("source_type", "unknown")),
+                "source_name": str(item.get("source", ""))[:160],
                 "title": str(item.get("title", ""))[:250],
-                "snippet": str(item.get("snippet", ""))[:350],
+                "snippet": str(item.get("snippet", ""))[:500],
                 "published_at": str(item.get("published_at", "")),
+                "query": str(item.get("query", ""))[:250],
                 "url": str(item.get("url", "")),
             })
         result.append({
             "month": str(month.get("month", "")),
             "previous_month": str(month.get("previous_month", "")),
-            "change_rate_pct": _num(month.get("change_rate_pct")),
+            "change_rate_pct": change_pct,
             "current_approval_amount": _num(month.get("current_approval_amount")),
             "previous_approval_amount": _num(month.get("previous_approval_amount")),
             "direction": str(month.get("direction", "UNKNOWN")),
             "status": str(month.get("status", "unknown")),
+            "analysis_eligible": bool(month.get("analysis_eligible", True)),
+            "excluded_undated_results": month.get("excluded_undated_results", {}),
+            "source_result_counts": month.get("source_result_counts", {}),
             "search_subject": str(month.get("search_subject", "")),
             "results": sources,
         })
@@ -158,7 +173,7 @@ def build_portfolio_payload(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_company_payloads(data: dict[str, Any]) -> tuple[list[list[dict[str, Any]]], dict[str, str]]:
-    """Return batches with only enterprise-level metrics; target 1999 also has Naver evidence."""
+    """Return enterprise-only batches; only ID 1999 receives Starbucks community evidence."""
     payloads: list[dict[str, Any]] = []
     ref_to_id: dict[str, str] = {}
     for index, company in enumerate(data.get("enterprises", []), start=1):
@@ -175,7 +190,6 @@ def build_company_payloads(data: dict[str, Any]) -> tuple[list[list[dict[str, An
             "monthly_sales": _sales_history(company.get("monthly_sales"), limit=12),
         }
         item: dict[str, Any] = {"ref": ref, "metrics": metrics}
-        # Only the one known, explicitly permitted exception receives brand/search context.
         if enterprise_id == "1999":
             item["known_business_context"] = "스타벅스"
             item["monthly_change_evidence"] = _clean_evidence(company.get("monthly_change_evidence"))
@@ -231,6 +245,11 @@ def _monthly_evidence_ids(evidence: Any) -> dict[str, set[str]]:
     for month in evidence.get("months", []):
         if not isinstance(month, dict):
             continue
+        if month.get("analysis_eligible") is False:
+            continue
+        pct = _num(month.get("change_rate_pct"))
+        if pct is None or abs(float(pct)) < MIN_ABS_CHANGE_PCT_FOR_CAUSE_ANALYSIS:
+            continue
         valid[str(month.get("month", ""))] = {
             str(source.get("evidence_id")) for source in month.get("results", [])
             if isinstance(source, dict) and source.get("evidence_id")
@@ -239,7 +258,7 @@ def _monthly_evidence_ids(evidence: Any) -> dict[str, set[str]]:
 
 
 def _validate_month_hypotheses(hypotheses: Any, evidence: Any) -> list[dict[str, Any]]:
-    """Drop invented months and any candidate reason not grounded in valid evidence IDs."""
+    """Drop ineligible months and reasons not grounded in valid same-month evidence IDs."""
     if not isinstance(evidence, dict) or not isinstance(hypotheses, list):
         return []
     valid_ids = _monthly_evidence_ids(evidence)
@@ -270,8 +289,6 @@ def _validate_month_hypotheses(hypotheses: Any, evidence: Any) -> list[dict[str,
             "candidate_reasons": candidates,
             "limitations": str(row.get("limitations", ""))[:800],
         })
-    # If evidence exists for a change month but the model omitted it, leave evidence visible;
-    # the UI will state that no grounded hypothesis was returned.
     return result
 
 
@@ -289,14 +306,22 @@ def generate_insights(
 
     batches, ref_to_id = build_company_payloads(data)
     company_instructions = (
-        "당신은 기업 단위 매출·가맹점 리텐션 분석가입니다. 모든 기업별 인사이트를 한국어로 작성하세요. "
-        "기업명이나 식별번호를 추정하지 말고 제공한 ref를 그대로 반환하세요. 수치의 인과관계를 단정하지 말고, "
-        "위험 점수는 이탈 확률이 아니라고 명확히 하세요. 권고 조치는 최대 3개, 관측 결과는 최대 3개로 작성하세요. "
-        "monthly_change_evidence가 제공된 기업에 대해서만 월별 원인 가설을 작성합니다. 가설은 해당 월의 제공된 뉴스 결과에 근거해야 하며, "
-        "각 candidate_reasons는 실제 제공된 evidence_id를 최소 1개 포함해야 합니다. 해당 월에 검색 결과가 없거나 API 자격 증명이 없으면 "
-        "원인을 추측하지 말고 candidate_reasons를 빈 배열로 하고 한계에 근거 부족을 명시하세요. 뉴스 발표일이 매출 변동 월과 다를 수 있으므로 "
-        "기사 날짜와 대상 월의 관계를 주의해서 해석하고, 기사에서 관측된 외부 정황이 내부 매출 변화의 원인이라고 단정하지 마세요. "
-        "제공되지 않은 출처나 evidence_id를 절대 만들지 마세요. 다른 기업에 월별 검색 증거가 없으면 monthly_cause_hypotheses는 빈 배열입니다."
+        "당신은 기업 단위 승인금액 변화의 원인을 조사하는 분석가입니다. 한국어로 답하세요. "
+        "기업명이나 식별번호를 추정하지 말고 제공한 ref를 그대로 반환하세요. 위험 점수는 이탈 확률이 아닙니다. "
+        "권고 조치는 최대 3개, 관측 결과는 최대 3개로 작성하세요. "
+        "스타벅스(known_business_context=스타벅스)와 월별 검색 근거가 제공된 회사 1999만 월별 원인 가설을 작성할 수 있습니다. "
+        "분석 대상은 스타벅스의 전체 회사 매출이 아니라 입력 데이터의 국민은행 관련 승인금액/거래 변화일 수 있습니다. 전체 브랜드 매출처럼 표현하지 마세요. "
+        "매출변화율 절대값이 10% 이상인 달만 원인 분석 대상입니다. 각 가설의 month는 제공된 대상 월과 정확히 일치해야 합니다. "
+        "자료 우선순위는 네이버 카페 이용자 반응, 네이버 블로그, 뉴스 보도 순입니다. 카페/블로그의 개별 글은 대표성 있는 설문이 아니므로 여론 전체로 일반화하지 마세요. "
+        "스타벅스 자체 이슈(가격, 제품 품질, 서비스, 매장 운영, 불매/논란, 신제품·시즌 행사 등)와 국민은행 연관 이슈(KB국민카드, KB Pay, 국민은행 프로모션·할인·포인트·결제 혜택)를 함께 살피세요. "
+        "각 후보 이유에서 국민은행과의 관련성이 직접인지 간접인지 반드시 설명하세요. 직접 관련은 해당 자료에 국민은행/KB국민카드/KB Pay 또는 관련 프로모션·결제 혜택이 명시된 경우입니다. "
+        "스타벅스 브랜드 이슈만 있고 KB 언급이 없으면 가능한 간접 영향으로만 서술하고, KB 승인금액 변화와 연결된다는 근거가 약함을 밝히세요. "
+        "방향을 반드시 반영하세요: DOWN이면 감소를 설명할 수 있는 근거(부정 반응, 혜택 종료/변경, 결제 불편 등)를 찾고, UP이면 증가를 설명할 수 있는 근거(프로모션, 혜택, 시즌 수요, 긍정 반응 등)를 찾으세요. "
+        "이 예시는 분석 항목일 뿐 사실로 가정하지 마세요. 해당 월에 확인된 자료가 지지하지 않으면 이유로 제시하지 마세요. "
+        "각 candidate_reasons는 실제 제공된 evidence_id를 최소 1개 포함해야 합니다. 출처, 날짜, 인과관계를 꾸며내지 마세요. "
+        "매출 변화 월과 같은 달에 게시된 자료만 제공됩니다. 해당 월 자료가 없거나 KB 관계를 뒷받침할 근거가 없으면 candidate_reasons를 빈 배열로 하고 limitations에 명시하세요. "
+        "reason에는 그럴듯한 설명을 간결하게, relationship에는 실제 자료와 KB 승인금액 변화 사이의 연결 및 확신 수준을 적으세요. "
+        "다른 기업의 monthly_cause_hypotheses는 항상 빈 배열입니다."
     )
     for batch in batches:
         result = call(client, model, company_instructions, {"companies": batch}, "company_insights", COMPANY_BATCH_SCHEMA, 8000)
@@ -320,8 +345,6 @@ def generate_insights(
                 insight["monthly_cause_hypotheses"] = []
             target["openai_insight"] = insight
 
-    # The public artifact is company-only. Merchant records are neither prompted to
-    # OpenAI nor written to the deployed JSON.
     data.pop("merchants", None)
     summary = data.get("summary", {})
     for key in ("latest_month_observed_count", "high_risk_count", "medium_risk_count", "low_risk_count", "unknown_count"):
@@ -332,13 +355,16 @@ def generate_insights(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "status": "success",
         "scope": "enterprise_only",
-        "note": "기업 단위 요약. 월별 원인 가설은 기업관리번호 1999의 네이버 뉴스 증거에 근거하며 인과관계를 확정하지 않습니다.",
+        "note": (
+            "기업 승인금액 변화의 월별 분석. 기업 1999에 한해 같은 달의 카페 반응을 우선, "
+            "블로그·뉴스를 보조 근거로 분석합니다. 국민은행 연관성은 직접 언급과 간접 추정을 구분하며 인과관계를 확정하지 않습니다."
+        ),
     }
     return data
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate enterprise-only OpenAI insights")
+    parser = argparse.ArgumentParser(description="Generate enterprise-only OpenAI insights using monthly cafe/blog/news evidence")
     parser.add_argument("--input", default="public-data/dashboard_summary.json")
     parser.add_argument("--output", default="public-data/dashboard_summary.json")
     args = parser.parse_args()
@@ -363,7 +389,6 @@ def main() -> None:
         request_id = getattr(exc, "request_id", None)
         diagnostics = [f"HTTP {status}" if status is not None else "", f"code={str(code)[:80]}" if code else "", f"request_id={str(request_id)[:100]}" if request_id else ""]
         diagnostics = [x for x in diagnostics if x]
-        # Only safe exception messages from our own errors are printed; never log prompts/secrets.
         own_detail = str(exc)[:800] if isinstance(exc, RuntimeError) else ""
         extra = (" | " + ", ".join(diagnostics)) if diagnostics else ""
         detail = (" | " + own_detail) if own_detail else ""
