@@ -17,9 +17,23 @@ async function loadDashboard() {
   document.getElementById('merchant-count').textContent = numberFormat.format(summary.merchant_count || 0);
   document.getElementById('high-merchant-count').textContent = numberFormat.format(summary.high_risk_count || 0);
   document.getElementById('data-notice').textContent = dashboardData.notice || 'AI 이상징후 탐지 기반 분석입니다. 점수는 이탈 확률이 아닙니다.';
+  renderPortfolioAI();
   renderRiskBars();
   renderSalesChart();
   renderEnterpriseRows();
+}
+
+function renderPortfolioAI() {
+  const target = document.getElementById('portfolio-ai-content');
+  const insight = dashboardData.openai_portfolio_insight;
+  if (!insight) {
+    target.innerHTML = '<p class="ai-muted">OpenAI 인사이트가 없습니다. GitHub Actions의 OpenAI 분석 단계가 성공했는지 확인해 주세요.</p>';
+    return;
+  }
+  target.innerHTML = `<h3 class="ai-headline">${escapeHtml(insight.headline || '기업 포트폴리오 요약')}</h3>
+    <p class="ai-summary">${escapeHtml(insight.summary || '')}</p>
+    <div class="ai-columns"><div><h4>주요 확인 영역</h4>${renderAIList(insight.focus_areas || [])}</div><div><h4>권장 조치</h4>${renderAIList(insight.recommended_actions || [])}</div></div>
+    <p class="ai-limitation">${escapeHtml(insight.limitations || 'AI 결과는 담당자가 검토한 뒤 활용하세요.')}</p>`;
 }
 
 function renderRiskBars() {
@@ -61,7 +75,7 @@ function renderEnterpriseRows() {
     const score = e.risk_score === null || e.risk_score === undefined ? '—' : Number(e.risk_score).toFixed(1);
     const detailUrl = `company.html?enterprise_id=${encodeURIComponent(e.enterprise_id)}`;
     return `<tr class="clickable-row" data-href="${escapeHtml(detailUrl)}">
-      <td><strong>${escapeHtml(e.enterprise_name || '기업명 없음')}</strong><small class="cell-subtitle">관리번호 ${escapeHtml(e.enterprise_id)}</small></td>
+      <td><strong>${escapeHtml(e.enterprise_name || '기업명 없음')}</strong><small class="cell-subtitle">관리번호 ${escapeHtml(e.enterprise_id)}</small>${e.openai_insight?.headline ? `<small class="ai-cell-summary">✳ ${escapeHtml(e.openai_insight.headline)}</small>` : ''}</td>
       <td>${numberFormat.format(e.merchant_count || 0)}개</td>
       <td class="danger">${numberFormat.format(e.high_risk_count || 0)}개</td>
       <td class="warning">${numberFormat.format(e.medium_risk_count || 0)}개</td>
@@ -75,6 +89,11 @@ function renderEnterpriseRows() {
     if (event.target.closest('a')) return;
     window.location.href = row.dataset.href;
   }));
+}
+
+function renderAIList(items) {
+  if (!items || !items.length) return '<p class="ai-muted">제공된 내용이 없습니다.</p>';
+  return `<ul class="ai-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 }
 
 function formatRate(value) {

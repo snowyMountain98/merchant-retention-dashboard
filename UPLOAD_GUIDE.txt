@@ -1,40 +1,35 @@
-기업별 메인 화면 + 기업/가맹점 상세 화면 적용 가이드
+GitHub 웹에서 적용할 파일 안내 (로컬 실행 불필요)
 
-적용 파일
-- index.html: 메인, 기업별 요약/검색/위험 등급
-- company.html: 기업 선택 후 소속 가맹점 목록/요약/기업 월별 추이
-- merchant-detail.html: 가맹점 상세, 월별 승인/취소/부분취소 추이, AI 분석 근거
-- assets/css/style.css, assets/js/*.js
-- src/analysis/build_dashboard.py: 기업관리번호/기업명 및 가맹점별 12개월 이력 생성
-- .github/workflows/analyze.yml: 새 HTML 페이지들을 Pages 산출물에 포함
-- tests/test_enterprise_grouping.py: 기업/가맹점 계층 데이터 테스트
+1) 파일을 GitHub 저장소의 main 브랜치에 반영하세요. 파일을 모두 수정/추가한 뒤 한 번에 커밋하는 것이 좋습니다.
+
+기존 파일 교체:
+- requirements.txt
+- .github/workflows/analyze.yml
 - README.md
+- index.html
+- company.html
+- merchant-detail.html
+- assets/css/style.css
+- assets/js/dashboard.js
+- assets/js/company-detail.js
+- assets/js/merchant-detail.js
 
-GitHub에서 반영하는 방법 (로컬 실행 불필요)
-1. https://github.dev/snowyMountain98/merchant-retention-dashboard 열기
-2. 이 ZIP을 PC에서 압축 해제합니다.
-3. 아래 파일은 기존 경로의 파일 내용을 교체합니다.
-   index.html
-   assets/css/style.css
-   assets/js/dashboard.js
-   src/analysis/build_dashboard.py
-   .github/workflows/analyze.yml
-   README.md
-4. 아래는 새 파일로 추가합니다.
-   company.html
-   merchant-detail.html
-   assets/js/company-detail.js
-   assets/js/merchant-detail.js
-   tests/test_enterprise_grouping.py
-5. Source Control에서 변경 파일을 Stage하고 커밋합니다.
-6. main 직접 커밋이 거부되면 ai-company-detail 같은 새 브랜치에서 커밋하고 Pull Request를 생성해 main에 병합합니다.
-7. Settings > Pages > Build and deployment의 Source가 GitHub Actions인지 확인합니다.
-8. Actions 탭에서 "AI Merchant Retention Analysis and Deploy" 실행이 성공했는지 확인합니다.
-9. 사이트: https://snowymountain98.github.io/merchant-retention-dashboard/
+새 파일 추가:
+- src/analysis/generate_openai_insights.py
+- tests/test_openai_insights.py
 
-중요
-- 이 ZIP에는 실제 정산 엑셀 파일이 포함되어 있지 않습니다. 저장소에 이미 업로드된 원본 엑셀을 분석 입력으로 읽습니다.
-- 원본 엑셀 파일은 읽기 전용입니다. 스크립트는 원본을 수정/저장하지 않습니다.
-- Pages 산출물에는 index/company/merchant-detail 화면, 정적 자산 및 dashboard_summary.json만 복사하며 원본 XLSX는 복사하지 않습니다.
-- 회사명 중복이 있을 수 있으므로 기업 식별 키는 기업관리번호입니다.
-- Isolation Forest 점수는 이상징후 상대 점수이지 실제 이탈 확률이 아닙니다.
+주의:
+- 기존 src/analysis/build_dashboard.py 및 원본 엑셀 파일은 교체하거나 편집하지 마세요.
+- OPENAI_MODEL은 기본적으로 gpt-5.6-luna를 사용하며 필요하면 Actions Variables에서 바꿀 수 있습니다. OPENAI_API_KEY 값을 파일에 쓰지 마세요. GitHub Settings > Secrets and variables > Actions에 저장되어 있어야 합니다.
+- Actions workflow는 원본 엑셀을 분석해 JSON을 생성한 다음, 그 JSON에 OpenAI 설명을 추가하고 HTML/JS/CSS/JSON만 Pages 산출물에 복사합니다.
+- 공개 저장소와 Pages에는 분석된 지표 및 AI 설명이 공개됩니다. 실제 게시 권한과 공개 범위를 확인하세요.
+- Pages의 Source를 GitHub Actions로 설정하세요.
+
+GitHub 웹에서 파일 생성/수정:
+- 저장소에서 파일을 열고 연필(Edit) 버튼을 눌러 교체합니다.
+- 새 파일은 Add file > Create new file 에서 경로와 파일명을 입력합니다.
+- Branch protection으로 main에 바로 커밋할 수 없다면 새 브랜치에 커밋하고 Pull Request를 만드세요.
+
+확인:
+- Actions > AI Merchant Retention Analysis and Deploy
+- pytest 실행과 OpenAI 인사이트 생성 단계가 모두 성공해야 Pages에 새 버전이 배포됩니다.

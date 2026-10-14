@@ -36,7 +36,24 @@ async function init() {
   document.getElementById('detail-notice').textContent = `${data.analysis_month || '기준월 미상'} 기준 분석 · ${merchant.data_quality === 'INSUFFICIENT_HISTORY' ? '비교 이력이 부족하여 AI 점수를 산출하지 못했습니다.' : '점수는 이탈 확률이 아니라 이상징후 상대 점수입니다.'}`;
   const reasons = merchant.risk_reasons || [];
   document.getElementById('risk-reasons').innerHTML = reasons.length ? reasons.map(r => `<span class="reason-tag">${escapeHtml(r)}</span>`).join('') : '<span class="empty-reasons">표시할 위험 사유가 없습니다.</span>';
+  renderMerchantAI(merchant.openai_insight);
   renderHistory(merchant.monthly_sales || []);
+}
+
+function renderMerchantAI(insight) {
+  const target = document.getElementById('merchant-ai-content');
+  if (!insight) {
+    target.innerHTML = '<p class="ai-muted">OpenAI 가맹점 진단이 없습니다. GitHub Actions 실행 로그를 확인하세요.</p>';
+    return;
+  }
+  target.innerHTML = `<p class="ai-summary">${escapeHtml(insight.summary || '')}</p>
+    <div class="ai-columns"><div><h4>관측 신호</h4>${renderAIList(insight.signals || [])}</div><div><h4>권장 조치</h4>${renderAIList(insight.recommended_actions || [])}</div></div>
+    <div class="ai-contact"><h4>상담 문구 초안</h4><p>${escapeHtml(insight.contact_script || '')}</p></div>
+    <p class="ai-limitation">${escapeHtml(insight.limitations || 'AI 결과는 담당자가 검토한 뒤 활용하세요.')}</p>`;
+}
+function renderAIList(items) {
+  if (!items || !items.length) return '<p class="ai-muted">제공된 내용이 없습니다.</p>';
+  return `<ul class="ai-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 }
 
 function renderHistory(rows) {

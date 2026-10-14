@@ -28,9 +28,27 @@ async function init() {
   document.getElementById('medium-count').textContent = numberFormat.format(enterprise.medium_risk_count || 0);
   document.getElementById('approval-amount').textContent = `${moneyFormat(enterprise.current_approval_amount)}원`;
   document.getElementById('detail-notice').textContent = data.notice || 'AI 이상징후 점수는 이탈 확률이 아닙니다.';
+  renderCompanyAI();
   renderCompanyChart();
   renderRiskSummary();
   renderMerchants();
+}
+
+function renderCompanyAI() {
+  const target = document.getElementById('company-ai-content');
+  const insight = enterprise.openai_insight;
+  if (!insight) {
+    target.innerHTML = '<p class="ai-muted">OpenAI 기업 진단이 없습니다. GitHub Actions 실행 로그를 확인하세요.</p>';
+    return;
+  }
+  target.innerHTML = `<h3 class="ai-headline">${escapeHtml(insight.headline || '기업별 진단')}</h3>
+    <p class="ai-summary">${escapeHtml(insight.summary || '')}</p>
+    <div class="ai-columns"><div><h4>관측 결과 해석</h4>${renderAIList(insight.observations || [])}</div><div><h4>권장 조치</h4>${renderAIList(insight.recommended_actions || [])}</div></div>
+    <p class="ai-limitation">${escapeHtml(insight.limitations || 'AI 결과는 담당자가 검토한 뒤 활용하세요.')}</p>`;
+}
+function renderAIList(items) {
+  if (!items || !items.length) return '<p class="ai-muted">제공된 내용이 없습니다.</p>';
+  return `<ul class="ai-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 }
 
 function renderCompanyChart() {

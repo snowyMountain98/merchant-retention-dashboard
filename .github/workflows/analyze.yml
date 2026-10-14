@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
       pages: write
@@ -40,6 +40,15 @@ jobs:
         run: >-
           python src/analysis/build_dashboard.py
           --input "스타플랫폼거래집계.xlsx"
+          --output public-data/dashboard_summary.json
+
+      - name: Generate OpenAI business and merchant insights
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-luna' }}
+        run: >-
+          python src/analysis/generate_openai_insights.py
+          --input public-data/dashboard_summary.json
           --output public-data/dashboard_summary.json
 
       - name: Assemble Pages site without the source workbook
