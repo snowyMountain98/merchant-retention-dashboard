@@ -3,43 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>기업별 가맹점 이탈 징후 대시보드</title>
+  <title>기업별 리텐션 AI 대시보드</title>
   <link rel="stylesheet" href="assets/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script defer src="assets/js/dashboard.js"></script>
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">✳</span><span>Merchant<br>Retention</span></div>
+    <div class="brand"><span class="brand-mark">✳</span><span>Enterprise<br>Retention AI</span></div>
     <p class="nav-label">WORKSPACE</p>
     <a class="nav-item active" href="index.html">▦　기업별 현황</a>
-    <div class="sidebar-foot">AI ANOMALY DETECTION</div>
+    <div class="sidebar-foot">OPENAI · NAVER EVIDENCE</div>
   </aside>
   <main class="main">
     <header class="topbar">
-      <div><p class="eyebrow">MERCHANT SUCCESS / MONITORING</p><h1>기업별 이탈 위험 현황</h1><p class="page-subtitle">기업을 선택하면 소속 가맹점별 분석으로 이동합니다.</p></div>
+      <div><p class="eyebrow">ENTERPRISE RETENTION / MONITORING</p><h1>기업별 매출 변화 및 이탈 위험</h1><p class="page-subtitle">기업별 실적과 AI 요약을 확인하고, 기업을 선택해 월별 근거를 살펴보세요.</p></div>
       <div class="date-chip">분석 기준 <strong id="analysis-month">—</strong></div>
     </header>
-    <div class="notice" id="data-notice">AI 분석 결과를 불러오는 중입니다.</div>
-    <section class="panel ai-panel" id="portfolio-ai-panel">
-      <div class="panel-head"><div><h2><span class="openai-mark">✳</span> OpenAI 포트폴리오 브리핑</h2><p>기업별·가맹점별 집계 지표를 바탕으로 생성한 AI 요약</p></div><span class="mini-tag">OPENAI</span></div>
-      <div id="portfolio-ai-content" class="ai-content"><p class="ai-muted">AI 진단을 불러오는 중입니다.</p></div>
-    </section>
+    <div class="notice" id="data-notice">분석 데이터를 불러오는 중입니다.</div>
     <section class="kpi-grid">
       <article class="kpi-card"><div class="kpi-label">분석 대상 기업</div><div class="kpi-number" id="enterprise-count">—</div><div class="kpi-foot">기업관리번호 기준</div></article>
-      <article class="kpi-card"><div class="kpi-label">위험 기업</div><div class="kpi-number danger" id="high-enterprise-count">—</div><div class="kpi-foot">소속 가맹점에 고위험 신호 존재</div></article>
-      <article class="kpi-card"><div class="kpi-label">분석 대상 가맹점</div><div class="kpi-number" id="merchant-count">—</div><div class="kpi-foot">전체 기업 소속 가맹점</div></article>
-      <article class="kpi-card"><div class="kpi-label">고위험 가맹점</div><div class="kpi-number danger" id="high-merchant-count">—</div><div class="kpi-foot">우선 확인 대상</div></article>
+      <article class="kpi-card"><div class="kpi-label">위험 기업</div><div class="kpi-number danger" id="high-enterprise-count">—</div><div class="kpi-foot">우선 확인 대상</div></article>
+      <article class="kpi-card"><div class="kpi-label">주의 기업</div><div class="kpi-number warning" id="medium-enterprise-count">—</div><div class="kpi-foot">추가 관찰 필요</div></article>
+      <article class="kpi-card"><div class="kpi-label">최근 집계월 승인금액</div><div class="kpi-number" id="total-approval-amount">—</div><div class="kpi-foot">기업별 승인금액 합계</div></article>
+    </section>
+    <section class="panel ai-panel" id="portfolio-ai-panel">
+      <div class="panel-head"><div><h2><span class="openai-mark">✳</span> OpenAI 포트폴리오 브리핑</h2><p>전체 기업 집계에서 확인된 주요 변화와 권장 조치</p></div><span class="mini-tag">OPENAI</span></div>
+      <div id="portfolio-ai-content" class="ai-content"><p class="ai-muted">AI 브리핑을 불러오는 중입니다.</p></div>
     </section>
     <section class="panel-grid">
-      <article class="panel chart-panel"><div class="panel-head"><div><h2>전체 월별 승인금액 추이</h2><p>최근 12개 집계월 · 승인금액 합계</p></div><span class="mini-tag">TREND</span></div><div class="chart-wrap"><canvas id="sales-chart"></canvas></div></article>
-      <article class="panel risk-panel"><div class="panel-head"><div><h2>기업별 위험 등급</h2><p>소속 가맹점 중 가장 높은 위험 등급 기준</p></div></div><div class="risk-bars" id="risk-bars"></div><div class="score-note">AI 이상징후 점수는 과거 거래 패턴 대비 상대 점수이며, 이탈 확률이 아닙니다. 확인 필요는 데이터 누락 또는 비교 이력 부족을 포함합니다.</div></article>
+      <article class="panel chart-panel"><div class="panel-head"><div><h2>전체 월별 승인금액 추이</h2><p>최근 집계월 · 기업별 승인금액 합산</p></div><span class="mini-tag">TREND</span></div><div class="chart-wrap"><canvas id="sales-chart"></canvas></div></article>
+      <article class="panel risk-panel"><div class="panel-head"><div><h2>기업 위험 등급 분포</h2><p>기업 단위 이상징후 분류</p></div></div><div class="risk-bars" id="risk-bars"></div><div class="score-note">Isolation Forest 점수는 과거 거래 패턴 대비 이상징후 상대 점수이며, 이탈 확률이 아닙니다.</div></article>
     </section>
     <section class="panel" id="enterprise-table">
-      <div class="panel-head table-head"><div><h2>기업 목록</h2><p>기업관리번호를 기준으로 구분합니다. 같은 기업명이라도 관리번호가 다르면 별도 기업으로 표시됩니다.</p></div><div class="table-controls"><input id="search" type="search" placeholder="기업명 / 기업관리번호 검색"><select id="risk-filter"><option value="ALL">전체 등급</option><option value="HIGH">위험</option><option value="MEDIUM">주의</option><option value="LOW">낮은 위험</option><option value="UNKNOWN">확인 필요</option></select></div></div>
-      <div class="table-scroll"><table><thead><tr><th>기업명 / 관리번호</th><th>가맹점 수</th><th>고위험</th><th>주의</th><th>AI 위험점수</th><th>승인금액</th><th>전월 대비</th><th>상세</th></tr></thead><tbody id="enterprise-rows"><tr><td colspan="8">분석 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
+      <div class="panel-head table-head"><div><h2>기업 목록</h2><p>가맹점 단위 상세 화면은 제공하지 않습니다. 기업관리번호로 기업을 구분합니다.</p></div><div class="table-controls"><input id="search" type="search" placeholder="기업명 / 기업관리번호 검색"><select id="risk-filter"><option value="ALL">전체 등급</option><option value="HIGH">위험</option><option value="MEDIUM">주의</option><option value="LOW">낮은 위험</option><option value="UNKNOWN">확인 필요</option></select></div></div>
+      <div class="table-scroll"><table><thead><tr><th>기업명 / 관리번호</th><th>기업 단위 위험</th><th>AI 점수</th><th>승인금액</th><th>전월 대비</th><th>AI 요약</th><th>상세</th></tr></thead><tbody id="enterprise-rows"><tr><td colspan="7">기업 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
     </section>
-    <footer>Merchant Retention Dashboard · Enterprise overview</footer>
+    <footer>Enterprise Retention Dashboard · Company-level analysis only</footer>
   </main>
 </body>
 </html>

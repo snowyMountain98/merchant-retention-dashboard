@@ -1,0 +1,11 @@
+가맹점별 분석 코드도 저장소에서 완전히 제거하려면 아래 파일을 GitHub 웹 UI에서 삭제하세요.
+
+- merchant-detail.html
+- assets/js/merchant-detail.js
+- src/analysis/build_dashboard.py
+- src/analysis/calculate_risk.py
+- tests/test_ai_scoring.py
+- tests/test_calculate_risk.py
+- tests/test_enterprise_grouping.py
+
+각 파일을 GitHub에서 열고 연필 옆 휴지통(Delete this file) 아이콘을 선택한 뒤 commit하면 됩니다. 신규 workflow는 위 파일을 사용하지 않으며 Pages에 배포하지 않습니다. 새 기업 단위 테스트는 tests/test_enterprise_dashboard.py 입니다.

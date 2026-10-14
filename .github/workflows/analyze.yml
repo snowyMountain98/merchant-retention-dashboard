@@ -1,4 +1,4 @@
-name: AI Merchant Retention Analysis and Deploy
+name: Enterprise Retention Analysis and Deploy
 
 on:
   push:
@@ -33,16 +33,25 @@ jobs:
       - name: Install analysis dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Run AI scoring unit tests
+      - name: Run tests
         run: python -m pytest -q
 
-      - name: Build AI analysis from the uploaded workbook
+      - name: Build enterprise and anomaly metrics from source workbook
         run: >-
-          python src/analysis/build_dashboard.py
+          python src/analysis/build_enterprise_dashboard.py
           --input "스타플랫폼거래집계.xlsx"
           --output public-data/dashboard_summary.json
 
-      - name: Generate OpenAI business and merchant insights
+      - name: Search monthly news evidence for enterprise 1999 only
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: >-
+          python src/analysis/generate_naver_evidence.py
+          --input public-data/dashboard_summary.json
+          --output public-data/dashboard_summary.json
+
+      - name: Generate OpenAI enterprise-only insights
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-luna' }}
@@ -51,17 +60,43 @@ jobs:
           --input public-data/dashboard_summary.json
           --output public-data/dashboard_summary.json
 
-      - name: Assemble Pages site without the source workbook
+      - name: Remove all individual merchant records from the public data
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('public-data/dashboard_summary.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          data.pop('merchants', None)
+          summary = data.get('summary', {})
+          for key in ('merchant_count', 'latest_month_observed_count', 'high_risk_count', 'medium_risk_count', 'low_risk_count', 'unknown_count'):
+              summary.pop(key, None)
+          path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+          assert 'merchants' not in data
+          print('Public JSON is enterprise-only; individual merchant records removed.')
+          PY
+
+      - name: Assemble enterprise-only Pages site without the source workbook
         run: |
           rm -rf site
-          mkdir -p site/public-data
+          mkdir -p site/assets/css site/assets/js site/public-data
           cp index.html site/index.html
           cp company.html site/company.html
-          cp merchant-detail.html site/merchant-detail.html
-          cp -r assets site/assets
+          cp assets/css/style.css site/assets/css/style.css
+          cp assets/css/company-evidence.css site/assets/css/company-evidence.css
+          cp assets/js/dashboard.js site/assets/js/dashboard.js
+          cp assets/js/company-detail.js site/assets/js/company-detail.js
           cp public-data/dashboard_summary.json site/public-data/dashboard_summary.json
           test ! -e site/스타플랫폼거래집계.xlsx
-          test ! -e site/data/raw
+          test ! -e site/merchant-detail.html
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('site/public-data/dashboard_summary.json').read_text(encoding='utf-8'))
+          assert 'merchants' not in data
+          assert all('monthly_change_evidence' not in e or str(e.get('enterprise_id')) == '1999' for e in data.get('enterprises', []))
+          print('Pages artifact check passed: enterprise-level data only; Naver evidence scoped to enterprise 1999.')
+          PY
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

@@ -1,9 +1,9 @@
-"""Generate OpenAI explanations for precomputed merchant-retention metrics.
+"""Generate enterprise-level OpenAI insights only (no merchant-level prompts).
 
-The OpenAI API receives only aggregate numeric metrics and temporary references.
-Enterprise IDs, merchant IDs, company names, merchant names, and source workbook
-rows are deliberately excluded from prompts. The source workbook is not read or
-modified by this module; it only enriches the analysis JSON generated earlier.
+The API receives company-level aggregates and, only for enterprise ID 1999, Naver
+News evidence already fetched by generate_naver_evidence.py. Enterprise IDs and
+names are replaced with opaque refs in the prompt. The original workbook is never
+read or modified here.
 """
 from __future__ import annotations
 
@@ -15,13 +15,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 DEFAULT_MODEL = "gpt-5.6-luna"
-COMPANY_BATCH_SIZE = 20
-MERCHANT_BATCH_SIZE = 25
-MAX_RETRIES_FOR_EMPTY_OUTPUT = 1
+COMPANY_BATCH_SIZE = 8
 
 PORTFOLIO_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
+    "type": "object", "additionalProperties": False,
     "properties": {
         "headline": {"type": "string"},
         "summary": {"type": "string"},
@@ -32,15 +29,37 @@ PORTFOLIO_SCHEMA = {
     "required": ["headline", "summary", "focus_areas", "recommended_actions", "limitations"],
 }
 
+MONTH_REASON_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "month": {"type": "string"},
+        "change_rate_pct": {"type": ["number", "null"]},
+        "direction": {"type": "string", "enum": ["DOWN", "UP", "UP_FROM_ZERO", "UNCHANGED", "UNKNOWN"]},
+        "candidate_reasons": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "reason": {"type": "string"},
+                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                    "confidence": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
+                    "relationship": {"type": "string"},
+                },
+                "required": ["reason", "evidence_ids", "confidence", "relationship"],
+            },
+        },
+        "limitations": {"type": "string"},
+    },
+    "required": ["month", "change_rate_pct", "direction", "candidate_reasons", "limitations"],
+}
+
 COMPANY_BATCH_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
+    "type": "object", "additionalProperties": False,
     "properties": {
         "items": {
             "type": "array",
             "items": {
-                "type": "object",
-                "additionalProperties": False,
+                "type": "object", "additionalProperties": False,
                 "properties": {
                     "ref": {"type": "string"},
                     "headline": {"type": "string"},
@@ -48,32 +67,9 @@ COMPANY_BATCH_SCHEMA = {
                     "observations": {"type": "array", "items": {"type": "string"}},
                     "recommended_actions": {"type": "array", "items": {"type": "string"}},
                     "limitations": {"type": "string"},
+                    "monthly_cause_hypotheses": {"type": "array", "items": MONTH_REASON_SCHEMA},
                 },
-                "required": ["ref", "headline", "summary", "observations", "recommended_actions", "limitations"],
-            },
-        }
-    },
-    "required": ["items"],
-}
-
-MERCHANT_BATCH_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "ref": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "signals": {"type": "array", "items": {"type": "string"}},
-                    "recommended_actions": {"type": "array", "items": {"type": "string"}},
-                    "contact_script": {"type": "string"},
-                    "limitations": {"type": "string"},
-                },
-                "required": ["ref", "summary", "signals", "recommended_actions", "contact_script", "limitations"],
+                "required": ["ref", "headline", "summary", "observations", "recommended_actions", "limitations", "monthly_cause_hypotheses"],
             },
         }
     },
@@ -81,7 +77,7 @@ MERCHANT_BATCH_SCHEMA = {
 }
 
 
-def _number(value: Any) -> float | int | None:
+def _num(value: Any) -> int | float | None:
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -93,7 +89,7 @@ def _number(value: Any) -> float | int | None:
     return int(number) if number.is_integer() else round(number, 2)
 
 
-def _history(rows: Any, limit: int = 6) -> list[dict[str, Any]]:
+def _sales_history(rows: Any, limit: int = 12) -> list[dict[str, Any]]:
     if not isinstance(rows, list):
         return []
     result = []
@@ -102,12 +98,40 @@ def _history(rows: Any, limit: int = 6) -> list[dict[str, Any]]:
             continue
         result.append({
             "month": str(row.get("month", "")),
-            "approval_amount": _number(row.get("approval_amount")),
-            "approval_count": _number(row.get("approval_count")),
-            "cancel_amount": _number(row.get("cancel_amount")),
-            "cancel_count": _number(row.get("cancel_count")),
-            "partial_cancel_amount": _number(row.get("partial_cancel_amount")),
-            "partial_cancel_count": _number(row.get("partial_cancel_count")),
+            "approval_amount": _num(row.get("approval_amount")),
+            "approval_count": _num(row.get("approval_count")),
+        })
+    return result
+
+
+def _clean_evidence(evidence: Any) -> list[dict[str, Any]]:
+    if not isinstance(evidence, dict):
+        return []
+    result = []
+    for month in evidence.get("months", []):
+        if not isinstance(month, dict) or month.get("direction") == "UNCHANGED":
+            continue
+        sources = []
+        for item in month.get("results", [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            sources.append({
+                "evidence_id": str(item.get("evidence_id", "")),
+                "title": str(item.get("title", ""))[:250],
+                "snippet": str(item.get("snippet", ""))[:350],
+                "published_at": str(item.get("published_at", "")),
+                "url": str(item.get("url", "")),
+            })
+        result.append({
+            "month": str(month.get("month", "")),
+            "previous_month": str(month.get("previous_month", "")),
+            "change_rate_pct": _num(month.get("change_rate_pct")),
+            "current_approval_amount": _num(month.get("current_approval_amount")),
+            "previous_approval_amount": _num(month.get("previous_approval_amount")),
+            "direction": str(month.get("direction", "UNKNOWN")),
+            "status": str(month.get("status", "unknown")),
+            "search_subject": str(month.get("search_subject", "")),
+            "results": sources,
         })
     return result
 
@@ -115,334 +139,241 @@ def _history(rows: Any, limit: int = 6) -> list[dict[str, Any]]:
 def build_portfolio_payload(data: dict[str, Any]) -> dict[str, Any]:
     summary = data.get("summary", {})
     enterprises = data.get("enterprises", [])
-    merchants = data.get("merchants", [])
-    merchant_map: dict[str, list[dict[str, Any]]] = {}
-    for merchant in merchants:
-        merchant_map.setdefault(str(merchant.get("enterprise_id", "")), []).append(merchant)
-
-    company_rows = []
-    for index, company in enumerate(enterprises, start=1):
-        company_merchants = merchant_map.get(str(company.get("enterprise_id", "")), [])
-        top = sorted(
-            [m for m in company_merchants if m.get("risk_score") is not None],
-            key=lambda m: float(m.get("risk_score") or 0), reverse=True,
-        )[:3]
-        company_rows.append({
-            "ref": f"company_{index:04d}",
-            "risk_level": company.get("risk_level"),
-            "risk_score": _number(company.get("risk_score")),
-            "merchant_count": _number(company.get("merchant_count")),
-            "high_risk_count": _number(company.get("high_risk_count")),
-            "medium_risk_count": _number(company.get("medium_risk_count")),
-            "unknown_count": _number(company.get("unknown_count")),
-            "current_approval_amount": _number(company.get("current_approval_amount")),
-            "previous_approval_amount": _number(company.get("previous_approval_amount")),
-            "sales_change_rate": _number(company.get("sales_change_rate")),
-            "transaction_change_rate": _number(company.get("transaction_change_rate")),
-            "monthly_sales": _history(company.get("monthly_sales"), limit=6),
-            "top_merchant_patterns": [
-                {
-                    "risk_level": m.get("risk_level"),
-                    "risk_score": _number(m.get("risk_score")),
-                    "sales_change_rate": _number(m.get("sales_change_rate")),
-                    "transaction_change_rate": _number(m.get("transaction_change_rate")),
-                    "inactive_days": _number(m.get("inactive_days")),
-                    "risk_reasons": [str(x) for x in (m.get("risk_reasons") or [])[:5]],
-                }
-                for m in top
-            ],
-        })
-
     return {
         "analysis_month": data.get("analysis_month"),
         "as_of_date": data.get("as_of_date"),
-        "portfolio_metrics": {
-            "enterprise_count": _number(summary.get("enterprise_count")),
-            "merchant_count": _number(summary.get("merchant_count")),
-            "high_risk_enterprise_count": _number(summary.get("high_risk_enterprise_count")),
-            "medium_risk_enterprise_count": _number(summary.get("medium_risk_enterprise_count")),
-            "high_risk_count": _number(summary.get("high_risk_count")),
-            "medium_risk_count": _number(summary.get("medium_risk_count")),
-            "unknown_count": _number(summary.get("unknown_count")),
-            "monthly_sales": _history(data.get("monthly_sales"), limit=6),
+        "enterprise_metrics": {
+            "enterprise_count": _num(summary.get("enterprise_count")),
+            "high_risk_enterprise_count": _num(summary.get("high_risk_enterprise_count")),
+            "medium_risk_enterprise_count": _num(summary.get("medium_risk_enterprise_count")),
+            "total_current_approval_amount": sum(float(e.get("current_approval_amount") or 0) for e in enterprises),
+            "enterprises_with_declining_sales": sum(1 for e in enterprises if e.get("sales_change_rate") is not None and float(e["sales_change_rate"]) < 0),
         },
-        "companies": company_rows,
+        "portfolio_monthly_sales": _sales_history(data.get("monthly_sales", []), limit=12),
+        "risk_distribution": {
+            level: sum(1 for e in enterprises if e.get("risk_level") == level)
+            for level in ("HIGH", "MEDIUM", "LOW", "UNKNOWN")
+        },
     }
 
 
 def build_company_payloads(data: dict[str, Any]) -> tuple[list[list[dict[str, Any]]], dict[str, str]]:
-    merchants_by_enterprise: dict[str, list[dict[str, Any]]] = {}
-    for merchant in data.get("merchants", []):
-        merchants_by_enterprise.setdefault(str(merchant.get("enterprise_id", "")), []).append(merchant)
-
+    """Return batches with only enterprise-level metrics; target 1999 also has Naver evidence."""
     payloads: list[dict[str, Any]] = []
     ref_to_id: dict[str, str] = {}
     for index, company in enumerate(data.get("enterprises", []), start=1):
+        enterprise_id = str(company.get("enterprise_id", "")).strip()
         ref = f"company_{index:04d}"
-        ref_to_id[ref] = str(company.get("enterprise_id", ""))
-        company_merchants = merchants_by_enterprise.get(str(company.get("enterprise_id", "")), [])
-        top = sorted(
-            [m for m in company_merchants if m.get("risk_score") is not None],
-            key=lambda m: float(m.get("risk_score") or 0), reverse=True,
-        )[:5]
-        payloads.append({
-            "ref": ref,
-            "metrics": {
-                "risk_level": company.get("risk_level"),
-                "risk_score": _number(company.get("risk_score")),
-                "merchant_count": _number(company.get("merchant_count")),
-                "high_risk_count": _number(company.get("high_risk_count")),
-                "medium_risk_count": _number(company.get("medium_risk_count")),
-                "low_risk_count": _number(company.get("low_risk_count")),
-                "unknown_count": _number(company.get("unknown_count")),
-                "current_approval_amount": _number(company.get("current_approval_amount")),
-                "previous_approval_amount": _number(company.get("previous_approval_amount")),
-                "sales_change_rate": _number(company.get("sales_change_rate")),
-                "transaction_change_rate": _number(company.get("transaction_change_rate")),
-                "monthly_sales": _history(company.get("monthly_sales"), limit=6),
-            },
-            "priority_merchant_patterns": [
-                {
-                    "risk_level": m.get("risk_level"),
-                    "risk_score": _number(m.get("risk_score")),
-                    "sales_change_rate": _number(m.get("sales_change_rate")),
-                    "transaction_change_rate": _number(m.get("transaction_change_rate")),
-                    "inactive_days": _number(m.get("inactive_days")),
-                    "risk_reasons": [str(x) for x in (m.get("risk_reasons") or [])[:5]],
-                }
-                for m in top
-            ],
-        })
+        ref_to_id[ref] = enterprise_id
+        metrics = {
+            "risk_level": company.get("risk_level"),
+            "risk_score": _num(company.get("risk_score")),
+            "current_approval_amount": _num(company.get("current_approval_amount")),
+            "previous_approval_amount": _num(company.get("previous_approval_amount")),
+            "sales_change_rate": _num(company.get("sales_change_rate")),
+            "transaction_change_rate": _num(company.get("transaction_change_rate")),
+            "monthly_sales": _sales_history(company.get("monthly_sales"), limit=12),
+        }
+        item: dict[str, Any] = {"ref": ref, "metrics": metrics}
+        # Only the one known, explicitly permitted exception receives brand/search context.
+        if enterprise_id == "1999":
+            item["known_business_context"] = "스타벅스"
+            item["monthly_change_evidence"] = _clean_evidence(company.get("monthly_change_evidence"))
+        payloads.append(item)
     return [payloads[i:i + COMPANY_BATCH_SIZE] for i in range(0, len(payloads), COMPANY_BATCH_SIZE)], ref_to_id
 
 
-def build_merchant_payloads(data: dict[str, Any]) -> tuple[list[list[dict[str, Any]]], dict[str, tuple[str, str]]]:
-    payloads: list[dict[str, Any]] = []
-    ref_to_key: dict[str, tuple[str, str]] = {}
-    for index, merchant in enumerate(data.get("merchants", []), start=1):
-        ref = f"merchant_{index:04d}"
-        ref_to_key[ref] = (str(merchant.get("enterprise_id", "")), str(merchant.get("merchant_id", "")))
-        payloads.append({
-            "ref": ref,
-            "metrics": {
-                "risk_level": merchant.get("risk_level"),
-                "risk_score": _number(merchant.get("risk_score")),
-                "data_quality": merchant.get("data_quality"),
-                "sales_change_rate": _number(merchant.get("sales_change_rate")),
-                "transaction_change_rate": _number(merchant.get("transaction_change_rate")),
-                "sales_below_3m_pct": _number(merchant.get("sales_below_3m_pct")),
-                "transactions_below_3m_pct": _number(merchant.get("transactions_below_3m_pct")),
-                "inactive_days": _number(merchant.get("inactive_days")),
-                "last_transaction_date": merchant.get("last_transaction_date"),
-                "current_approval_amount": _number(merchant.get("current_approval_amount")),
-                "current_approval_count": _number(merchant.get("current_approval_count")),
-                "risk_reasons": [str(x) for x in (merchant.get("risk_reasons") or [])[:7]],
-                "monthly_sales": _history(merchant.get("monthly_sales"), limit=6),
-            },
-        })
-    return [payloads[i:i + MERCHANT_BATCH_SIZE] for i in range(0, len(payloads), MERCHANT_BATCH_SIZE)], ref_to_key
-
-
-def _format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
-    return {"type": "json_schema", "name": name, "strict": True, "schema": schema}
-
-
-def _response_diagnostic(response: Any) -> str:
-    """Summarize response metadata without logging prompts or response content."""
-    status = getattr(response, "status", None) or "unknown"
-    incomplete = getattr(response, "incomplete_details", None)
-    if incomplete is not None:
-        if hasattr(incomplete, "model_dump"):
-            incomplete = incomplete.model_dump(exclude_none=True)
-        elif not isinstance(incomplete, (str, int, float, bool, dict, list)):
-            incomplete = str(incomplete)
-    output_types = []
-    refusal_seen = False
-    for item in (getattr(response, "output", None) or []):
-        item_type = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else "unknown")
-        content = getattr(item, "content", None) or (item.get("content", []) if isinstance(item, dict) else [])
-        content_types = []
-        for block in content or []:
-            block_type = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else "unknown")
-            content_types.append(block_type)
-            if block_type == "refusal":
-                refusal_seen = True
-        output_types.append({"type": item_type, "content_types": content_types})
-    usage = getattr(response, "usage", None)
-    output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
-    safe = {"status": status, "incomplete_details": incomplete, "output_items": output_types,
-            "refusal_present": refusal_seen, "output_tokens": output_tokens}
-    return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-
-
-def call_structured(client: Any, model: str, instructions: str, payload: Any, schema_name: str, schema: dict[str, Any], max_output_tokens: int = 5000) -> dict[str, Any]:
-    """Request a strict JSON object. Use low reasoning for short batch summaries.
-
-    When the model returns an incomplete/empty JSON response, retry once with a
-    larger output budget. Diagnostics intentionally omit prompts, source data,
-    generated text and credentials.
-    """
-    serialized_input = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    token_budget = max_output_tokens
-    last_error = None
-    for attempt in range(MAX_RETRIES_FOR_EMPTY_OUTPUT + 1):
+def call_structured(
+    client: Any, model: str, instructions: str, payload: Any, schema_name: str,
+    schema: dict[str, Any], max_output_tokens: int = 5000,
+) -> dict[str, Any]:
+    """Use strict JSON output and retry one incomplete/empty output with a larger budget."""
+    last_diagnostic = "unknown response state"
+    for attempt in range(2):
+        token_limit = max_output_tokens * (2 if attempt else 1)
         response = client.responses.create(
             model=model,
             instructions=instructions,
-            input=serialized_input,
-            text={"format": _format(schema_name, schema), "verbosity": "low"},
+            input=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             reasoning={"effort": "low"},
-            max_output_tokens=token_budget,
+            text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}, "verbosity": "low"},
+            max_output_tokens=token_limit,
         )
         raw = getattr(response, "output_text", None)
-        diagnostic = _response_diagnostic(response)
-        if not raw:
-            last_error = RuntimeError(f"OpenAI 응답 텍스트가 비어 있습니다 (schema={schema_name}, attempt={attempt + 1}, response={diagnostic}).")
-        else:
+        if raw:
             try:
                 value = json.loads(raw)
             except json.JSONDecodeError:
-                last_error = RuntimeError(f"OpenAI JSON 응답을 파싱하지 못했습니다 (schema={schema_name}, chars={len(raw)}, attempt={attempt + 1}, response={diagnostic}).")
+                last_diagnostic = "output_text_not_valid_json"
             else:
-                if not isinstance(value, dict):
-                    last_error = RuntimeError(f"OpenAI 응답이 JSON 객체가 아닙니다 (schema={schema_name}, response={diagnostic}).")
-                else:
+                if isinstance(value, dict):
                     return value
-        refusal_present = '"refusal_present":true' in str(diagnostic).replace(" ", "")
-        if attempt >= MAX_RETRIES_FOR_EMPTY_OUTPUT or refusal_present:
-            raise last_error
-        token_budget = min(token_budget * 2, 24000)
-        print(f"OpenAI 응답 형식/길이 문제로 1회 재시도 | schema={schema_name} | response={diagnostic}")
-    raise last_error or RuntimeError(f"OpenAI 응답 생성 실패 (schema={schema_name}).")
+                last_diagnostic = "output_not_json_object"
+        else:
+            output = getattr(response, "output", None) or []
+            if any(
+                getattr(content, "type", None) == "refusal"
+                for item in output for content in (getattr(item, "content", None) or [])
+            ):
+                raise RuntimeError(f"OpenAI returned refusal (schema={schema_name})")
+            status = getattr(response, "status", "unknown")
+            incomplete = getattr(response, "incomplete_details", None)
+            last_diagnostic = f"status={status}; incomplete_details={incomplete}"
+        if attempt == 0:
+            continue
+    raise RuntimeError(f"OpenAI structured response unavailable (schema={schema_name}; {last_diagnostic})")
 
 
-def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
-    return [items[i:i + size] for i in range(0, len(items), size)]
+def _monthly_evidence_ids(evidence: Any) -> dict[str, set[str]]:
+    valid: dict[str, set[str]] = {}
+    if not isinstance(evidence, dict):
+        return valid
+    for month in evidence.get("months", []):
+        if not isinstance(month, dict):
+            continue
+        valid[str(month.get("month", ""))] = {
+            str(source.get("evidence_id")) for source in month.get("results", [])
+            if isinstance(source, dict) and source.get("evidence_id")
+        }
+    return valid
 
 
-def generate_insights(data: dict[str, Any], client: Any, model: str, call: Callable[..., dict[str, Any]] = call_structured) -> dict[str, Any]:
-    """Enrich data in place; API prompts use opaque refs instead of actual identifiers."""
-    portfolio_payload = build_portfolio_payload(data)
+def _validate_month_hypotheses(hypotheses: Any, evidence: Any) -> list[dict[str, Any]]:
+    """Drop invented months and any candidate reason not grounded in valid evidence IDs."""
+    if not isinstance(evidence, dict) or not isinstance(hypotheses, list):
+        return []
+    valid_ids = _monthly_evidence_ids(evidence)
+    result = []
+    for row in hypotheses:
+        if not isinstance(row, dict):
+            continue
+        month = str(row.get("month", ""))
+        if month not in valid_ids:
+            continue
+        candidates = []
+        for candidate in row.get("candidate_reasons", []):
+            if not isinstance(candidate, dict):
+                continue
+            refs = [str(ref) for ref in candidate.get("evidence_ids", []) if str(ref) in valid_ids[month]]
+            if not refs:
+                continue
+            candidates.append({
+                "reason": str(candidate.get("reason", ""))[:600],
+                "evidence_ids": refs,
+                "confidence": candidate.get("confidence") if candidate.get("confidence") in ("LOW", "MEDIUM", "HIGH") else "LOW",
+                "relationship": str(candidate.get("relationship", ""))[:600],
+            })
+        result.append({
+            "month": month,
+            "change_rate_pct": _num(row.get("change_rate_pct")),
+            "direction": str(row.get("direction", "UNKNOWN")),
+            "candidate_reasons": candidates,
+            "limitations": str(row.get("limitations", ""))[:800],
+        })
+    # If evidence exists for a change month but the model omitted it, leave evidence visible;
+    # the UI will state that no grounded hypothesis was returned.
+    return result
+
+
+def generate_insights(
+    data: dict[str, Any], client: Any, model: str,
+    call: Callable[..., dict[str, Any]] = call_structured,
+) -> dict[str, Any]:
     portfolio_instructions = (
-        "당신은 결제사업자의 가맹점 유지관리 분석가입니다. 제공된 집계 수치만 근거로 한국어 요약을 작성하세요. "
-        "인과관계를 증명할 수 없으면 원인을 단정하지 말고 확인할 가설이라고 밝히세요. 데이터에 없는 사실, 혜택, 계약 조건, 원인을 만들지 마세요. "
-        "수치 계산을 새로 하지 말고 입력된 수치만 인용하세요. 위험 점수를 이탈 확률이라고 표현하지 마세요. "
-        "권고는 담당자가 확인할 수 있는 구체적이고 현실적인 행동이어야 하며, 고객에게 자동으로 연락했다고 주장하지 마세요."
+        "당신은 결제사업자의 기업 포트폴리오 분석가입니다. 한국어로 짧은 요약, 집중 영역, 권장 조치를 작성하세요. "
+        "입력 집계 수치만 근거로 말하고, 상관관계를 원인으로 단정하거나 입력에 없는 사실을 만들지 마세요. "
+        "이상징후 점수는 이탈 확률이 아닙니다. 담당자가 확인할 수 있는 행동을 권고하고 한계를 명시하세요."
     )
-    print("OpenAI 인사이트 요청 | 범위=전체 포트폴리오")
-    portfolio = call(client, model, portfolio_instructions, portfolio_payload, "portfolio_insight", PORTFOLIO_SCHEMA, 3000)
+    portfolio = call(client, model, portfolio_instructions, build_portfolio_payload(data), "portfolio_insight", PORTFOLIO_SCHEMA, 1800)
     data["openai_portfolio_insight"] = portfolio
 
-    company_batches, company_ref_to_id = build_company_payloads(data)
+    batches, ref_to_id = build_company_payloads(data)
     company_instructions = (
-        "당신은 기업 단위 가맹점 리텐션 분석가입니다. 각 ref마다 별도의 한국어 인사이트를 작성하세요. "
-        "정해진 값 외에는 추정하지 말고, 매출 변화와 가맹점 위험 분포를 근거로 요약하세요. "
-        "상관관계를 원인으로 단정하지 마세요. 위험 점수는 이탈 확률이 아닙니다. 데이터 부족은 반드시 언급하세요. "
-        "recommended_actions는 최대 3개, observations는 최대 3개로 간결하게 작성하세요."
+        "당신은 기업 단위 매출·가맹점 리텐션 분석가입니다. 모든 기업별 인사이트를 한국어로 작성하세요. "
+        "기업명이나 식별번호를 추정하지 말고 제공한 ref를 그대로 반환하세요. 수치의 인과관계를 단정하지 말고, "
+        "위험 점수는 이탈 확률이 아니라고 명확히 하세요. 권고 조치는 최대 3개, 관측 결과는 최대 3개로 작성하세요. "
+        "monthly_change_evidence가 제공된 기업에 대해서만 월별 원인 가설을 작성합니다. 가설은 해당 월의 제공된 뉴스 결과에 근거해야 하며, "
+        "각 candidate_reasons는 실제 제공된 evidence_id를 최소 1개 포함해야 합니다. 해당 월에 검색 결과가 없거나 API 자격 증명이 없으면 "
+        "원인을 추측하지 말고 candidate_reasons를 빈 배열로 하고 한계에 근거 부족을 명시하세요. 뉴스 발표일이 매출 변동 월과 다를 수 있으므로 "
+        "기사 날짜와 대상 월의 관계를 주의해서 해석하고, 기사에서 관측된 외부 정황이 내부 매출 변화의 원인이라고 단정하지 마세요. "
+        "제공되지 않은 출처나 evidence_id를 절대 만들지 마세요. 다른 기업에 월별 검색 증거가 없으면 monthly_cause_hypotheses는 빈 배열입니다."
     )
-    company_insights: dict[str, Any] = {}
-    for batch_index, batch in enumerate(company_batches, start=1):
-        print(f"OpenAI 인사이트 요청 | 범위=기업 | batch={batch_index}/{len(company_batches)} | items={len(batch)}")
-        try:
-            result = call(client, model, company_instructions, {"companies": batch}, "company_insights", COMPANY_BATCH_SCHEMA, 7000)
-        except Exception as exc:
-            raise RuntimeError(f"기업 인사이트 배치 {batch_index}/{len(company_batches)} 실패: {exc}") from exc
-        for item in result.get("items", []):
-            ref = item.get("ref")
-            if ref in company_ref_to_id:
-                company_insights[company_ref_to_id[ref]] = {k: v for k, v in item.items() if k != "ref"}
+    for batch in batches:
+        result = call(client, model, company_instructions, {"companies": batch}, "company_insights", COMPANY_BATCH_SCHEMA, 8000)
+        items = result.get("items", [])
+        returned = {str(item.get("ref")): item for item in items if isinstance(item, dict) and item.get("ref")}
+        for item in batch:
+            ref = str(item["ref"])
+            enterprise_id = ref_to_id[ref]
+            generated = returned.get(ref)
+            if generated is None:
+                raise RuntimeError(f"OpenAI company response missing ref={ref}")
+            target = next((company for company in data.get("enterprises", []) if str(company.get("enterprise_id", "")).strip() == enterprise_id), None)
+            if target is None:
+                raise RuntimeError(f"Dashboard enterprise mapping failed for ref={ref}")
+            insight = {k: generated.get(k) for k in ("headline", "summary", "observations", "recommended_actions", "limitations")}
+            if enterprise_id == "1999":
+                insight["monthly_cause_hypotheses"] = _validate_month_hypotheses(
+                    generated.get("monthly_cause_hypotheses", []), target.get("monthly_change_evidence")
+                )
+            else:
+                insight["monthly_cause_hypotheses"] = []
+            target["openai_insight"] = insight
 
-    for company in data.get("enterprises", []):
-        company_id = str(company.get("enterprise_id", ""))
-        insight = company_insights.get(company_id)
-        if not insight:
-            raise RuntimeError("OpenAI 응답에서 일부 기업의 AI 인사이트가 누락되었습니다. 해당 batch 응답의 ref를 확인하세요.")
-        company["openai_insight"] = insight
-
-    merchant_batches, merchant_ref_to_key = build_merchant_payloads(data)
-    merchant_instructions = (
-        "당신은 가맹점 유지관리 담당자를 지원하는 분석가입니다. 각 ref에 대해 관측된 수치와 위험 근거만 사용해 한국어 설명을 작성하세요. "
-        "원인을 확정하지 말고 가능한 해석과 확인 질문을 구분하세요. 데이터가 불충분하면 이를 명확히 표현하세요. "
-        "recommended_actions는 최대 3개, signals는 최대 3개로 작성하고, contact_script는 정중하고 짧은 상담 시작 문구로 작성하세요. "
-        "수익 회복이나 이탈 방지를 보장하지 말고, 고객에게 연락을 이미 했다고 쓰지 마세요. 위험 점수는 이탈 확률이 아닙니다."
-    )
-    merchant_insights: dict[tuple[str, str], Any] = {}
-    for batch_index, batch in enumerate(merchant_batches, start=1):
-        print(f"OpenAI 인사이트 요청 | 범위=가맹점 | batch={batch_index}/{len(merchant_batches)} | items={len(batch)}")
-        try:
-            result = call(client, model, merchant_instructions, {"merchants": batch}, "merchant_insights", MERCHANT_BATCH_SCHEMA, 8000)
-        except Exception as exc:
-            raise RuntimeError(f"가맹점 인사이트 배치 {batch_index}/{len(merchant_batches)} 실패: {exc}") from exc
-        for item in result.get("items", []):
-            ref = item.get("ref")
-            if ref in merchant_ref_to_key:
-                merchant_insights[merchant_ref_to_key[ref]] = {k: v for k, v in item.items() if k != "ref"}
-
-    for merchant in data.get("merchants", []):
-        key = (str(merchant.get("enterprise_id", "")), str(merchant.get("merchant_id", "")))
-        insight = merchant_insights.get(key)
-        if not insight:
-            raise RuntimeError("OpenAI 응답에서 일부 가맹점의 AI 인사이트가 누락되었습니다. 해당 batch 응답의 ref를 확인하세요.")
-        merchant["openai_insight"] = insight
-
+    # The public artifact is company-only. Merchant records are neither prompted to
+    # OpenAI nor written to the deployed JSON.
+    data.pop("merchants", None)
+    summary = data.get("summary", {})
+    for key in ("latest_month_observed_count", "high_risk_count", "medium_risk_count", "low_risk_count", "unknown_count"):
+        summary.pop(key, None)
     data["openai_metadata"] = {
         "provider": "OpenAI API",
         "model": model,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "status": "success",
-        "prompt_data_policy": "Aggregate metrics only; enterprise IDs, merchant IDs, and names are excluded from model prompts.",
-        "note": "AI-generated explanations and suggestions require human review and do not constitute a calibrated churn probability.",
+        "scope": "enterprise_only",
+        "note": "기업 단위 요약. 월별 원인 가설은 기업관리번호 1999의 네이버 뉴스 증거에 근거하며 인과관계를 확정하지 않습니다.",
     }
     return data
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Enrich merchant analysis JSON with OpenAI insights")
+    parser = argparse.ArgumentParser(description="Generate enterprise-only OpenAI insights")
     parser.add_argument("--input", default="public-data/dashboard_summary.json")
     parser.add_argument("--output", default="public-data/dashboard_summary.json")
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
-        raise SystemExit("OPENAI_API_KEY가 없습니다. GitHub Settings > Secrets and variables > Actions에 OPENAI_API_KEY를 등록하세요.")
+        raise SystemExit("OPENAI_API_KEY가 없습니다. GitHub Actions Secrets를 확인하세요.")
     model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-
     try:
         from openai import OpenAI
-    except ImportError as exc:
-        raise SystemExit("openai SDK가 설치되지 않았습니다. requirements.txt에 openai 패키지가 있는지 확인하세요.") from exc
+    except ImportError:
+        raise SystemExit("openai SDK가 없습니다. requirements.txt를 확인하세요.") from None
 
-    input_path = Path(args.input)
-    output_path = Path(args.output)
+    input_path, output_path = Path(args.input), Path(args.output)
     data = json.loads(input_path.read_text(encoding="utf-8"))
     client = OpenAI(api_key=api_key, timeout=90.0, max_retries=2)
     try:
         enriched = generate_insights(data, client, model)
     except Exception as exc:
-        # Log only error class / HTTP status / API error code, never request data or credentials.
         status = getattr(exc, "status_code", None)
-        error_code = getattr(exc, "code", None)
-        details = []
-        if status is not None:
-            details.append(f"HTTP {status}")
-        if error_code:
-            details.append(f"code={str(error_code)[:80]}")
-        suffix = f" [{', '.join(details)}]" if details else ""
-        # Our own RuntimeError messages contain only schema/batch/response metadata,
-        # never prompts, merchant identifiers, generated text, or API credentials.
-        safe_reason = str(exc)[:1200] if isinstance(exc, RuntimeError) else ""
-        reason_suffix = f" | detail={safe_reason}" if safe_reason else ""
+        code = getattr(exc, "code", None)
         request_id = getattr(exc, "request_id", None)
-        request_suffix = f" | request_id={str(request_id)[:100]}" if request_id else ""
-        raise SystemExit(f"OpenAI 인사이트 생성 실패 ({type(exc).__name__}){suffix}{request_suffix}{reason_suffix}. OPENAI_API_KEY, 모델 접근 권한, 응답 상태 및 API 사용량/결제 설정을 확인하세요.") from exc
+        diagnostics = [f"HTTP {status}" if status is not None else "", f"code={str(code)[:80]}" if code else "", f"request_id={str(request_id)[:100]}" if request_id else ""]
+        diagnostics = [x for x in diagnostics if x]
+        # Only safe exception messages from our own errors are printed; never log prompts/secrets.
+        own_detail = str(exc)[:800] if isinstance(exc, RuntimeError) else ""
+        extra = (" | " + ", ".join(diagnostics)) if diagnostics else ""
+        detail = (" | " + own_detail) if own_detail else ""
+        raise SystemExit(f"OpenAI 기업 인사이트 생성 실패 ({type(exc).__name__}){extra}{detail}") from None
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp = output_path.with_suffix(output_path.suffix + ".tmp")
     temp.write_text(json.dumps(enriched, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(output_path)
-    companies = len(enriched.get("enterprises", []))
-    merchants = len(enriched.get("merchants", []))
-    print(f"OpenAI 인사이트 생성 완료 | model={model} | companies={companies} | merchants={merchants}")
+    print(f"OpenAI 기업 인사이트 완료 | model={model} | enterprises={len(enriched.get('enterprises', []))} | scope=enterprise_only")
 
 
 if __name__ == "__main__":

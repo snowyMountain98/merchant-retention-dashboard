@@ -2,7 +2,6 @@ import json
 
 from src.analysis.generate_openai_insights import (
     build_company_payloads,
-    build_merchant_payloads,
     build_portfolio_payload,
     generate_insights,
 )
@@ -12,78 +11,64 @@ def sample_data():
     return {
         "analysis_month": "2026-09",
         "as_of_date": "2026-09-30",
-        "summary": {
-            "enterprise_count": 1,
-            "merchant_count": 1,
-            "high_risk_enterprise_count": 1,
-            "medium_risk_enterprise_count": 0,
-            "high_risk_count": 1,
-            "medium_risk_count": 0,
-            "unknown_count": 0,
-        },
-        "monthly_sales": [{"month": "2026-09", "approval_amount": 800, "approval_count": 8}],
-        "enterprises": [{
-            "enterprise_id": "ORG_SECRET_1",
-            "enterprise_name": "PRIVATE COMPANY NAME",
-            "risk_level": "HIGH", "risk_score": 99.1,
-            "merchant_count": 1, "high_risk_count": 1, "medium_risk_count": 0,
-            "low_risk_count": 0, "unknown_count": 0,
-            "current_approval_amount": 800, "previous_approval_amount": 1500,
-            "sales_change_rate": -46.7, "transaction_change_rate": -35,
-            "monthly_sales": [{"month": "2026-09", "approval_amount": 800, "approval_count": 8}],
-        }],
-        "merchants": [{
-            "enterprise_id": "ORG_SECRET_1", "enterprise_name": "PRIVATE COMPANY NAME",
-            "merchant_id": "MERCHANT_SECRET_1", "merchant_name": "PRIVATE MERCHANT NAME",
-            "risk_level": "HIGH", "risk_score": 99.3, "data_quality": "SUFFICIENT",
-            "sales_change_rate": -46.7, "transaction_change_rate": -35,
-            "sales_below_3m_pct": 30, "transactions_below_3m_pct": 22,
-            "inactive_days": 8, "last_transaction_date": "2026-09-22",
-            "current_approval_amount": 800, "current_approval_count": 8,
-            "risk_reasons": ["승인금액 감소"],
-            "monthly_sales": [{"month": "2026-09", "approval_amount": 800, "approval_count": 8}],
-        }],
+        "summary": {"enterprise_count": 2, "high_risk_enterprise_count": 1, "medium_risk_enterprise_count": 1},
+        "monthly_sales": [{"month": "2026-08", "approval_amount": 2000, "approval_count": 20}, {"month": "2026-09", "approval_amount": 1800, "approval_count": 18}],
+        "enterprises": [
+            {
+                "enterprise_id": "ORG_SECRET_1", "enterprise_name": "PRIVATE COMPANY NAME", "risk_level": "HIGH", "risk_score": 99.1,
+                "merchant_count": 3, "high_risk_count": 2, "medium_risk_count": 0, "low_risk_count": 1, "unknown_count": 0,
+                "current_approval_amount": 800, "previous_approval_amount": 1500, "sales_change_rate": -46.7,
+                "transaction_change_rate": -35, "monthly_sales": [{"month": "2026-09", "approval_amount": 800, "approval_count": 8}],
+            },
+            {
+                "enterprise_id": "1999", "enterprise_name": "MASKED_NAME", "risk_level": "MEDIUM", "risk_score": 92.5,
+                "merchant_count": 2, "high_risk_count": 1, "medium_risk_count": 1, "low_risk_count": 0, "unknown_count": 0,
+                "current_approval_amount": 900, "previous_approval_amount": 1000, "sales_change_rate": -10.0,
+                "transaction_change_rate": -8.0, "monthly_sales": [{"month": "2026-05", "approval_amount": 1000, "approval_count": 10}, {"month": "2026-06", "approval_amount": 800, "approval_count": 8}],
+                "monthly_change_evidence": {"status": "completed", "months": [{"month": "2026-06", "change_rate_pct": -20.0, "direction": "DOWN", "status": "found", "results": [{"evidence_id": "2026-06-E01", "title": "스타벅스 기사", "snippet": "공개 기사 요약", "published_at": "2026-07-04", "url": "https://example.org/news"}]}]},
+            },
+        ],
+        "merchants": [{"enterprise_id": "ORG_SECRET_1", "enterprise_name": "PRIVATE COMPANY NAME", "merchant_id": "MERCHANT_SECRET_1", "merchant_name": "PRIVATE MERCHANT NAME"}],
     }
 
 
-def test_openai_payloads_omit_names_and_real_identifiers():
+def test_openai_payloads_use_opaque_refs_and_only_enterprise_metrics():
     data = sample_data()
     portfolio = json.dumps(build_portfolio_payload(data), ensure_ascii=False)
     company_batches, _ = build_company_payloads(data)
-    merchant_batches, _ = build_merchant_payloads(data)
-    prompts = portfolio + json.dumps(company_batches, ensure_ascii=False) + json.dumps(merchant_batches, ensure_ascii=False)
+    prompt_data = portfolio + json.dumps(company_batches, ensure_ascii=False)
     for private_value in ["ORG_SECRET_1", "PRIVATE COMPANY NAME", "MERCHANT_SECRET_1", "PRIVATE MERCHANT NAME"]:
-        assert private_value not in prompts
+        assert private_value not in prompt_data
+    assert "monthly_change_evidence" in json.dumps(company_batches, ensure_ascii=False)
+    assert "merchant_id" not in prompt_data
 
 
-def test_generate_insights_maps_opaque_refs_to_dashboard_records():
+def test_generate_insights_outputs_company_only_and_grounded_month_causes():
     data = sample_data()
 
     def fake_call(client, model, instructions, payload, schema_name, schema, max_output_tokens=5000):
         if schema_name == "portfolio_insight":
-            return {
-                "headline": "매출 하락 집중 점검",
-                "summary": "승인금액이 감소했습니다.",
-                "focus_areas": ["거래 감소 추이"],
-                "recommended_actions": ["최근 거래 내역 확인"],
-                "limitations": "원인 확정은 추가 확인이 필요합니다.",
-            }
-        items = payload.get("companies") or payload.get("merchants") or []
-        if schema_name == "company_insights":
-            return {"items": [{
-                "ref": item["ref"], "headline": "우선 점검", "summary": "집계 지표를 확인하세요.",
-                "observations": ["승인금액 감소"], "recommended_actions": ["추이 확인"],
-                "limitations": "원인은 확정할 수 없습니다.",
-            } for item in items]}
+            return {"headline": "기업 포트폴리오 요약", "summary": "전반 실적을 확인하세요.", "focus_areas": ["매출 변화"], "recommended_actions": ["변화 기업을 검토"], "limitations": "원인은 단정할 수 없습니다."}
+        items = payload["companies"]
         return {"items": [{
-            "ref": item["ref"], "summary": "변화 추이를 확인하세요.",
-            "signals": ["승인금액 감소"], "recommended_actions": ["거래 흐름 확인"],
-            "contact_script": "최근 이용 상황을 확인드리고자 연락드렸습니다.",
-            "limitations": "이탈을 확정하는 진단은 아닙니다.",
+            "ref": item["ref"], "headline": "기업별 점검", "summary": "월별 추이를 검토하세요.",
+            "observations": ["승인금액 변화"], "recommended_actions": ["관련 근거를 확인"],
+            "limitations": "검색 증거는 인과관계를 입증하지 않습니다.",
+            "monthly_cause_hypotheses": ([{
+                "month": "2026-06", "change_rate_pct": -20.0, "direction": "DOWN",
+                "candidate_reasons": [{"reason": "공개 이슈와 시기상 연관 가능성", "evidence_ids": ["2026-06-E01"], "confidence": "LOW", "relationship": "기사 발행 시점과 승인금액 변화의 시간적 연관성만 관찰됩니다."}],
+                "limitations": "인과관계는 확정되지 않습니다.",
+            }] if "monthly_change_evidence" in item else []),
         } for item in items]}
 
     result = generate_insights(data, client=object(), model="test-model", call=fake_call)
-    assert result["openai_portfolio_insight"]["headline"] == "매출 하락 집중 점검"
-    assert result["enterprises"][0]["openai_insight"]["headline"] == "우선 점검"
-    assert result["merchants"][0]["openai_insight"]["contact_script"].startswith("최근 이용")
-    assert result["openai_metadata"]["status"] == "success"
+    assert result["openai_portfolio_insight"]["headline"] == "기업 포트폴리오 요약"
+    assert "merchants" not in result
+    assert "openai_insight" in result["enterprises"][0]
+    target = next(e for e in result["enterprises"] if e["enterprise_id"] == "1999")
+    assert target["openai_insight"]["monthly_cause_hypotheses"][0]["candidate_reasons"][0]["evidence_ids"] == ["2026-06-E01"]
+    other = next(e for e in result["enterprises"] if e["enterprise_id"] == "ORG_SECRET_1")
+    assert other["openai_insight"]["monthly_cause_hypotheses"] == []
+    output = json.dumps(result, ensure_ascii=False)
+    assert "MERCHANT_SECRET_1" not in output
+    assert result["openai_metadata"]["scope"] == "enterprise_only"
