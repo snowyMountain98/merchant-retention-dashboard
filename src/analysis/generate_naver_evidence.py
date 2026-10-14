@@ -87,7 +87,31 @@ def search_naver_news(
         with urllib.request.urlopen(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        # Do not log response bodies, query parameters or credentials.
+        # Print only Naver's structured error code/message to the Actions log.
+        # Never print request headers, query parameters, or credential values.
+        diagnostic_parts: list[str] = []
+        try:
+            raw_error = exc.read(4096).decode("utf-8", errors="replace")
+            error_payload = json.loads(raw_error)
+            if isinstance(error_payload, dict):
+                error_code = str(error_payload.get("errorCode") or "").strip()
+                error_message = _clean_text(error_payload.get("errorMessage") or "")[:300]
+                for secret in (client_id, client_secret):
+                    if secret:
+                        error_message = error_message.replace(secret, "[REDACTED]")
+                if error_code:
+                    diagnostic_parts.append(f"code={error_code}")
+                if error_message:
+                    diagnostic_parts.append(f"message={error_message}")
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        if diagnostic_parts:
+            print(f"Naver API diagnostic | HTTP {exc.code} | {'; '.join(diagnostic_parts)}")
+        else:
+            print(f"Naver API diagnostic | HTTP {exc.code} | response had no readable error details")
+
+        # Keep the persisted error generic; detailed diagnostics are only in workflow logs.
         raise NaverSearchError(f"Naver News API HTTP {exc.code}") from None
     except urllib.error.URLError:
         raise NaverSearchError("Naver News API network error") from None
