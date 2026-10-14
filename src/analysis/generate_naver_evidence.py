@@ -32,13 +32,13 @@ class NaverSearchError(RuntimeError):
 
 def _norm_id(value: Any) -> str:
     text = str(value or "").strip()
-    return re.sub(r"\\.0+$", "", text) if re.fullmatch(r"\\d+\\.0+", text) else text
+    return re.sub(r"\.0+$", "", text) if re.fullmatch(r"\d+\.0+", text) else text
 
 
 def _clean_text(value: Any) -> str:
     text = html.unescape(str(value or ""))
     text = re.sub(r"<[^>]*>", "", text)
-    return re.sub(r"\\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _iso_pub_date(value: Any) -> str | None:
@@ -156,7 +156,7 @@ def _monthly_changes(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_month: dict[str, dict[str, Any]] = {}
     for item in history:
         month = str(item.get("month", ""))[:7]
-        if re.fullmatch(r"\\d{4}-\\d{2}", month):
+        if re.fullmatch(r"\d{4}-\d{2}", month):
             by_month[month] = item
 
     output = []
