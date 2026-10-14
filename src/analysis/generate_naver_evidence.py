@@ -24,6 +24,7 @@ SEARCH_SUBJECT = "스타벅스"
 SEARCH_ENDPOINT = "https://naverapihub.apigw.ntruss.com/search/v1/news"
 DISPLAY_COUNT = 10
 MAX_EVIDENCE_PER_MONTH = 5
+MIN_ABS_CHANGE_PCT_FOR_NEWS = 10.0
 
 
 class NaverSearchError(RuntimeError):
@@ -41,14 +42,31 @@ def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _iso_pub_date(value: Any) -> str | None:
+def _parse_pub_date(value: Any):
+    """Parse API HUB/RFC822 or ISO publication dates; return None if uncertain."""
     if not value:
         return None
+    text = str(value).strip()
     try:
-        parsed = parsedate_to_datetime(str(value))
-        return parsed.isoformat(timespec="minutes")
+        # Python's ISO parser accepts offsets and, on supported versions, trailing Z.
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except (TypeError, ValueError, OverflowError):
-        return _clean_text(value) or None
+        pass
+    try:
+        return parsedate_to_datetime(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _iso_pub_date(value: Any) -> str | None:
+    parsed = _parse_pub_date(value)
+    return parsed.isoformat(timespec="minutes") if parsed else None
+
+
+def _published_month(value: Any) -> str | None:
+    """Return the publication date's own calendar month; never guess from text."""
+    parsed = _parse_pub_date(value)
+    return parsed.strftime("%Y-%m") if parsed else None
 
 
 def _previous_month(month: str) -> str:
@@ -216,12 +234,29 @@ def attach_naver_evidence(
             "search_subject": SEARCH_SUBJECT,
             "queries": [],
             "results": [],
+            "analysis_eligible": False,
             "status": "unchanged" if change["direction"] == "UNCHANGED" else "pending",
+            "skip_reason": None,
             "error": None,
         }
         if change["direction"] == "UNCHANGED":
+            record["skip_reason"] = "no_monthly_change"
             months.append(record)
             continue
+
+        change_pct = change.get("change_rate_pct")
+        if change_pct is None:
+            record["status"] = "change_rate_unavailable"
+            record["skip_reason"] = "percentage_change_unavailable"
+            months.append(record)
+            continue
+        if abs(float(change_pct)) < MIN_ABS_CHANGE_PCT_FOR_NEWS:
+            record["status"] = "below_threshold"
+            record["skip_reason"] = f"absolute_change_below_{MIN_ABS_CHANGE_PCT_FOR_NEWS:g}_percent"
+            months.append(record)
+            continue
+
+        record["analysis_eligible"] = True
         if not credentials_ready:
             record["status"] = "credentials_missing"
             months.append(record)
@@ -243,9 +278,17 @@ def attach_naver_evidence(
             except Exception:
                 errors.append("NAVER API HUB unexpected error")
 
+        # Search API results may include articles from adjacent months. Keep only
+        # articles whose publication date is inside the exact sales-change month.
+        exact_month_results: list[dict[str, Any]] = []
+        for result in query_results:
+            published_at = result.get("published_at") or result.get("pubDate")
+            if _published_month(published_at) == change["month"]:
+                exact_month_results.append(result)
+
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
-        for result in query_results:
+        for result in exact_month_results:
             url = str(result.get("url", "")).strip()
             if not url or url in seen:
                 continue
@@ -266,12 +309,15 @@ def attach_naver_evidence(
             record["status"] = "no_results"
         months.append(record)
 
-    if not credentials_ready:
+    eligible_months = [m for m in months if m.get("analysis_eligible")]
+    if eligible_months and not credentials_ready:
         overall_status = "credentials_missing"
     elif any(m["status"] in ("found", "partial") for m in months):
         overall_status = "completed"
     elif any(m["status"] == "api_error" for m in months):
         overall_status = "api_error"
+    elif not eligible_months:
+        overall_status = "no_eligible_months"
     else:
         overall_status = "no_results"
 
@@ -280,7 +326,9 @@ def attach_naver_evidence(
         "search_subject": SEARCH_SUBJECT,
         "status": overall_status,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "policy": "월별 승인금액 변화와 관련된 공개 뉴스 검색 결과입니다. 검색 결과는 원인에 대한 정황 증거이며 인과관계를 입증하지 않습니다.",
+        "policy": "전월 대비 매출변화율 절대값이 10% 이상인 월만 검색합니다. 기사 발행일이 대상 월과 정확히 일치하는 결과만 보관합니다. 검색 결과는 원인에 대한 정황 증거이며 인과관계를 입증하지 않습니다.",
+        "minimum_absolute_change_pct": MIN_ABS_CHANGE_PCT_FOR_NEWS,
+        "publication_month_filter": "exact_calendar_month",
         "months": months,
     }
     data["naver_search_metadata"] = {
@@ -289,6 +337,8 @@ def attach_naver_evidence(
         "target_enterprise_id": TARGET_ENTERPRISE_ID,
         "searched_enterprise_count": 1 if credentials_ready else 0,
         "query_months": sum(1 for m in months if m.get("queries")),
+        "minimum_absolute_change_pct": MIN_ABS_CHANGE_PCT_FOR_NEWS,
+        "publication_month_filter": "exact_calendar_month",
     }
     return data
 
