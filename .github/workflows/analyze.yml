@@ -36,7 +36,7 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Build enterprise and anomaly metrics from source workbook
+      - name: Build enterprise transaction states from source workbook
         run: >-
           python src/analysis/build_enterprise_dashboard.py
           --input "스타플랫폼거래집계.xlsx"

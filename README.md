@@ -1,24 +1,32 @@
-# Enterprise Retention AI Dashboard
+# 기업 거래 유지 현황 대시보드
 
-기업별 월간 승인금액·승인건수와 이상징후 지표를 집계하고, OpenAI API를 사용해 기업 단위 요약과 권장 조치를 생성하는 대시보드입니다.
+이 대시보드는 기업별 월간 승인금액·승인건수로 **관측 가능한 거래활동 상태**를 표시합니다. 기존 높음·주의·낮음 위험 등급, Isolation Forest 점수 및 그에 따른 정렬은 제거했습니다.
 
-## Analysis flow
-1. `src/analysis/build_enterprise_dashboard.py` reads the workbook read-only and aggregates records by enterprise and month.
-2. The calendar month range in the workbook is expanded to a complete enterprise × month grid. An absent enterprise-month row is interpreted as **0 approval amount and 0 approval count (no payments)**, not missing data.
-3. If both current and prior month amounts/counts are zero, the percentage change is 0%. If a previous-month value is zero and the current value is positive, the percentage is mathematically undefined and is kept as `null`; the AI prompt describes it as payments resuming rather than inventing a rate.
-4. Enterprise names are kept exactly as provided in the source data. If the source value is masked, that masked name remains the dashboard display name.
-5. `src/analysis/generate_openai_insights.py` sends enterprise-level aggregate metrics using opaque company references. Individual merchant rows, merchant names and enterprise names/IDs are not included in the OpenAI prompts.
-6. The deployment step removes any merchant records and verifies that display names match original enterprise names.
+## 거래 상태 기준
 
-## Configure
-Add `OPENAI_API_KEY` under GitHub repository Settings → Secrets and variables → Actions. `OPENAI_MODEL` is optional; default is `gpt-5.6-luna`.
+- **거래 유지 중**: 최신월 거래가 있고, 비교 가능한 직전 3개월 평균 대비 승인금액 또는 승인건수가 30% 이상 감소하지 않았습니다.
+- **거래 감소 관찰**: 최신월 승인금액 또는 승인건수가 직전 3개월 평균보다 30% 이상 낮습니다.
+- **최근 미거래**: 최신월 거래가 없고 과거 거래는 있으며 연속 미거래가 1~2개월입니다.
+- **장기 미거래**: 최신월 거래가 없고 과거 거래는 있으며 연속 미거래가 3개월 이상입니다.
+- **거래 재개**: 과거 거래 후 1개월 이상 미거래였다가 최신월에 거래가 다시 발생했습니다.
+- **최근 관측기간 첫 거래**: 분석기간 안에서 최신월 이전 승인 실적 없이 최신월에 거래가 발생했습니다.
+- **거래 이력 짧음**: 최초 승인 실적 이후 4개월 미만으로, 직전 3개월 추세 비교가 부족합니다.
+- **관측기간 내 거래 없음**: 분석기간 전체의 승인금액과 승인건수가 모두 0입니다.
 
-## Run locally
+30% 감소 기준은 설명 가능한 초기 운영 규칙이며, 실제 이탈을 예측하도록 검증된 기준은 아닙니다. 실제 기업 재무 건전성이나 미래 거래 유지 확률을 판단하려면 재무제표, 계약·해지 이력, 과거 이탈 라벨 등 추가 데이터와 별도의 검증이 필요합니다.
+
+## 계산 처리
+
+- 한 기업·월의 거래 행이 없으면 해당 월 승인금액과 승인건수를 0으로 채웁니다.
+- 거래 중단 개월 수는 최신월부터 역순으로, 승인금액과 승인건수가 모두 0인 연속 개월을 계산합니다.
+- 매출 감소 상태는 현재 값이 양수라는 이유만으로 정상이라 보지 않고, 승인금액과 승인건수 각각의 직전 3개월 평균 대비 감소폭을 따로 확인합니다.
+- 출력은 기업 단위와 카드·계좌/금융회사별 월간 집계만 포함합니다. 개별 가맹점별 레코드는 생성하지 않습니다.
+- GitHub Pages 공개 전에 기업별 승인금액 및 금융회사별 집계의 공개 허용 여부를 검토하세요.
+
+## 테스트 및 빌드
+
 ```bash
-python -m pip install -r requirements.txt
 python -m pytest -q
 python src/analysis/build_enterprise_dashboard.py --input "스타플랫폼거래집계.xlsx" --output public-data/dashboard_summary.json
 python src/analysis/generate_openai_insights.py --input public-data/dashboard_summary.json --output public-data/dashboard_summary.json
 ```
-
-The dashboard does not perform public web search or external-issue analysis. AI output interprets aggregated transaction metrics; it is not proof of causation or a probability of customer churn.

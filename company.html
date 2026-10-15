@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>기업별 AI 매출 분석</title>
+  <title>기업별 거래 유지 현황</title>
   <link rel="stylesheet" href="assets/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script defer src="assets/js/company-detail.js"></script>
@@ -14,13 +14,13 @@
     <p class="nav-label">WORKSPACE</p>
     <a class="nav-item" href="index.html">▦　기업별 현황</a>
     <a class="nav-item active" href="#company-summary">◉　기업 분석</a>
-    <div class="sidebar-foot">OPENAI INSIGHTS</div>
+    <div class="sidebar-foot">TRANSACTION STATUS</div>
   </aside>
   <main class="main">
     <a class="back-link" href="index.html">← 기업 목록으로</a>
     <header class="detail-header">
       <div><p class="eyebrow">ENTERPRISE / MONTHLY ANALYSIS</p><h1 id="enterprise-name">기업 정보를 불러오는 중입니다.</h1><div class="detail-code">기업관리번호 <strong id="enterprise-id">—</strong> · 기준월 <strong id="analysis-month">—</strong></div></div>
-      <div class="detail-header-actions"><span id="enterprise-risk" class="level-chip UNKNOWN">확인 필요</span></div>
+      <div class="detail-header-actions"><span id="enterprise-status" class="level-chip SHORT_HISTORY">거래 상태 확인 중</span></div>
     </header>
     <div class="notice detail-notice" id="detail-notice">기업별 분석 결과를 불러오는 중입니다.</div>
     <section class="panel ai-panel" id="company-ai-panel">
@@ -33,9 +33,15 @@
       <article class="detail-kpi"><div class="kpi-label">승인건수 전월 대비</div><div class="kpi-number" id="count-change">—</div><div class="kpi-foot">월별 집계 기준</div></article>
       <article class="detail-kpi"><div class="kpi-label">직전 3개월 평균 대비 하락 폭</div><div class="kpi-number" id="sales-baseline-change">—</div><div class="kpi-foot">승인금액 기준</div></article>
     </section>
+    <section class="activity-stats-grid" aria-label="거래 지속성 지표">
+      <article class="activity-stat"><div class="kpi-label">최근 3개월 거래 발생 월</div><div class="activity-stat-value" id="active-months-3">—</div><div class="kpi-foot">3개월 중 승인 실적이 있었던 월</div></article>
+      <article class="activity-stat"><div class="kpi-label">최근 6개월 거래 발생 월</div><div class="activity-stat-value" id="active-months-6">—</div><div class="kpi-foot">6개월 중 승인 실적이 있었던 월</div></article>
+      <article class="activity-stat"><div class="kpi-label">연속 미거래 개월</div><div class="activity-stat-value" id="zero-streak">—</div><div class="kpi-foot">최신월부터 역순 계산</div></article>
+      <article class="activity-stat"><div class="kpi-label">마지막 거래 실적 월</div><div class="activity-stat-value" id="last-active-month">—</div><div class="kpi-foot">승인금액 또는 승인건수 발생 기준</div></article>
+    </section>
     <section class="company-summary">
       <article class="panel chart-panel"><div class="panel-head"><div><h2>월별 승인금액 추이</h2><p>기업 단위 승인금액 합계</p></div><span class="mini-tag">TREND</span></div><div class="chart-wrap"><canvas id="company-sales-chart"></canvas></div></article>
-      <article class="panel"><div class="panel-head"><div><h2>기업 단위 주요 신호</h2><p>월별 실적에서 계산한 확인 항목</p></div></div><div id="company-signal-list" class="reason-list"></div><div class="score-note">개별 가맹점별 점수나 내역은 표시하지 않습니다.</div></article>
+      <article class="panel"><div class="panel-head"><div><h2>거래 상태 판단 근거</h2><p>거래 유지 상태를 산정한 월별 승인 실적 근거</p></div></div><div id="company-signal-list" class="reason-list"></div><div class="status-note">점수 등급은 사용하지 않습니다. 이 상태는 과거 승인 실적을 설명하며 미래 이탈 확률이나 재무 건전성 판정은 아닙니다.</div></article>
     </section>
     <section class="panel breakdown-panel" id="payment-method-analysis">
       <div class="panel-head"><div><h2>카드·계좌별 분석</h2><p>선택한 기업의 결제수단별 승인 실적과 월별 변화를 비교합니다.</p></div><span class="mini-tag">PAYMENT METHOD</span></div>

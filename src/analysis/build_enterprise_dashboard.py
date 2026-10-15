@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import calendar
 import json
-import math
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -17,9 +16,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import IsolationForest
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import RobustScaler
 
 COMPANY_ID = "기업관리번호"
 COMPANY_NAME = "기업명"
@@ -36,11 +32,6 @@ NUMERIC_COLUMNS = {
     "partial_cancel_amount": "부분취소금액",
 }
 REQUIRED_COLUMNS = {COMPANY_ID, COMPANY_NAME, MONTH_COL, DATE_COL, PAYMENT_METHOD_COL, FINANCIAL_COMPANY_COL, "승인건수", "승인금액"}
-FEATURES = [
-    "sales_drop_pct", "transaction_drop_pct", "sales_below_3m_pct",
-    "transactions_below_3m_pct", "cancel_ratio", "partial_cancel_ratio",
-    "consecutive_declines", "sales_volatility_6m_pct",
-]
 
 
 def _digits(value: Any) -> str:
@@ -116,125 +107,191 @@ def _json_num(value: Any) -> int | float:
     return int(number) if number.is_integer() else round(number, 2)
 
 
-def _ratio(numerator: float, denominator: float) -> float:
-    if denominator <= 0:
-        return float(np.clip(numerator, 0, 5))
-    return float(np.clip(numerator / denominator, 0, 5))
-
-
-def _feature_for_month(
+def _current_month_metrics(
     enterprise_id: str,
     month: str,
     month_map: dict[tuple[str, str], dict[str, float]],
-) -> tuple[dict[str, float], dict[str, Any]]:
+) -> dict[str, Any]:
     current = month_map.get((enterprise_id, month), {})
-    prev_month = _prev_month(month)
-    previous = month_map.get((enterprise_id, prev_month), {})
-    cur_sales = float(current.get("approval_amount", 0))
-    cur_count = float(current.get("approval_count", 0))
-    prev_sales = float(previous.get("approval_amount", 0)) if previous else None
-    prev_count = float(previous.get("approval_count", 0)) if previous else None
-    sales_change = _percent(cur_sales, prev_sales)
-    count_change = _percent(cur_count, prev_count)
-
-    prior = [month_map.get((enterprise_id, _prev_month(month, offset)), {}) for offset in (1, 2, 3)]
-    prior_sales = [float(row.get("approval_amount", 0)) for row in prior if row]
-    prior_counts = [float(row.get("approval_count", 0)) for row in prior if row]
-    sales_mean = float(np.mean(prior_sales)) if prior_sales else 0.0
-    count_mean = float(np.mean(prior_counts)) if prior_counts else 0.0
-    sales_below = max(0.0, (sales_mean - cur_sales) / sales_mean * 100) if sales_mean > 0 else 0.0
-    count_below = max(0.0, (count_mean - cur_count) / count_mean * 100) if count_mean > 0 else 0.0
-
-    series: list[float] = []
-    for offset in (3, 2, 1, 0):
-        row = month_map.get((enterprise_id, _prev_month(month, offset))) if offset else current
-        series.append(float(row.get("approval_amount", 0)) if row else float("nan"))
-    decline_count = sum(1 for left, right in zip(series, series[1:]) if math.isfinite(left) and math.isfinite(right) and left > right)
-    recent_sales = [float(month_map[(enterprise_id, _prev_month(month, offset))]["approval_amount"]) for offset in range(1, 7) if (enterprise_id, _prev_month(month, offset)) in month_map]
-    volatility = (float(np.std(recent_sales) / np.mean(recent_sales) * 100) if len(recent_sales) > 1 and np.mean(recent_sales) > 0 else 0.0)
-
-    features = {
-        "sales_drop_pct": float(np.clip(-(sales_change or 0), 0, 300)),
-        "transaction_drop_pct": float(np.clip(-(count_change or 0), 0, 300)),
-        "sales_below_3m_pct": float(np.clip(sales_below, 0, 300)),
-        "transactions_below_3m_pct": float(np.clip(count_below, 0, 300)),
-        "cancel_ratio": _ratio(float(current.get("cancel_amount", 0)), cur_sales),
-        "partial_cancel_ratio": _ratio(float(current.get("partial_cancel_amount", 0)), cur_sales),
-        "consecutive_declines": float(decline_count),
-        "sales_volatility_6m_pct": float(np.clip(volatility, 0, 500)),
+    previous = month_map.get((enterprise_id, _prev_month(month)))
+    current_sales = float(current.get("approval_amount", 0) or 0)
+    current_count = float(current.get("approval_count", 0) or 0)
+    previous_sales = float(previous.get("approval_amount", 0) or 0) if previous is not None else None
+    previous_count = float(previous.get("approval_count", 0) or 0) if previous is not None else None
+    return {
+        "sales_change_rate": _percent(current_sales, previous_sales),
+        "transaction_change_rate": _percent(current_count, previous_count),
+        "current_approval_amount": current_sales,
+        "current_approval_count": current_count,
+        "previous_approval_amount": previous_sales,
+        "previous_approval_count": previous_count,
+        "has_previous_month": previous is not None,
     }
-    info = {
-        "sales_change_rate": sales_change,
-        "transaction_change_rate": count_change,
-        "sales_below_3m_pct": round(sales_below, 1),
-        "transactions_below_3m_pct": round(count_below, 1),
-        "cancel_ratio": round(features["cancel_ratio"], 3),
-        "partial_cancel_ratio": round(features["partial_cancel_ratio"], 3),
-        "consecutive_declines": int(decline_count),
-        "sales_volatility_6m_pct": round(volatility, 1),
-        "current_approval_amount": cur_sales,
-        "current_approval_count": cur_count,
-        "previous_approval_amount": prev_sales,
-        "previous_approval_count": prev_count,
-        "has_previous_month": bool(previous),
-        "baseline_month_count": len(prior_sales),
+
+
+STATUS_LABELS = {
+    "TRADING": "거래 유지 중",
+    "DECLINING": "거래 감소 관찰",
+    "RECENTLY_INACTIVE": "최근 미거래",
+    "LONG_INACTIVE": "장기 미거래",
+    "RESTARTED": "거래 재개",
+    "FIRST_ACTIVITY": "최근 관측기간 첫 거래",
+    "SHORT_HISTORY": "거래 이력 짧음",
+    "NO_ACTIVITY": "관측기간 내 거래 없음",
+}
+
+STATUS_ORDER = {
+    "LONG_INACTIVE": 0,
+    "RECENTLY_INACTIVE": 1,
+    "DECLINING": 2,
+    "NO_ACTIVITY": 3,
+    "RESTARTED": 4,
+    "FIRST_ACTIVITY": 5,
+    "SHORT_HISTORY": 6,
+    "TRADING": 7,
+}
+
+
+def _has_activity(row: dict[str, float] | None) -> bool:
+    if not row:
+        return False
+    return float(row.get("approval_amount", 0) or 0) > 0 or float(row.get("approval_count", 0) or 0) > 0
+
+
+def _transaction_status(
+    enterprise_id: str,
+    month_map: dict[tuple[str, str], dict[str, float]],
+    all_months: list[str],
+    latest_month: str,
+) -> dict[str, Any]:
+    """Classify observed transaction activity with explicit, non-probabilistic rules.
+
+    No model score or uncalibrated churn probability is created. The 30% decline
+    threshold is a transparent operational alert, not a validated churn threshold.
+    """
+    active = [
+        _has_activity(month_map.get((enterprise_id, month)))
+        for month in all_months
+    ]
+    if not active:
+        return {
+            "transaction_status": "NO_ACTIVITY",
+            "transaction_status_label": STATUS_LABELS["NO_ACTIVITY"],
+            "status_reasons": ["분석기간에 해당하는 월별 데이터가 없습니다."],
+            "last_active_month": None,
+            "zero_activity_streak": 0,
+            "active_month_count_3": 0,
+            "active_month_count_6": 0,
+            "active_month_count_12": 0,
+            "sales_below_3m_pct": None,
+            "transactions_below_3m_pct": None,
+            "baseline_month_count": 0,
+        }
+
+    latest_index = len(all_months) - 1
+    is_active_now = active[-1]
+    active_indices = [i for i, value in enumerate(active) if value]
+    last_active_index = active_indices[-1] if active_indices else None
+    first_active_index = active_indices[0] if active_indices else None
+    last_active_month = all_months[last_active_index] if last_active_index is not None else None
+
+    zero_streak = 0
+    for value in reversed(active):
+        if value:
+            break
+        zero_streak += 1
+
+    prior_zero_streak = 0
+    for value in reversed(active[:-1]):
+        if value:
+            break
+        prior_zero_streak += 1
+
+    recent_active_counts = {
+        str(window): sum(active[max(0, len(active) - window):])
+        for window in (3, 6, 12)
     }
-    return features, info
+    months_since_first_active = (
+        latest_index - first_active_index + 1
+        if first_active_index is not None else 0
+    )
 
+    sales_below = None
+    count_below = None
+    baseline_month_count = 0
+    if first_active_index is not None:
+        # Compare against the three full calendar months preceding the current
+        # month, but do not treat pre-first-activity months as a sales baseline.
+        prior_indices = list(range(max(first_active_index, latest_index - 3), latest_index))
+        baseline_month_count = len(prior_indices)
+        if baseline_month_count == 3:
+            prior_rows = [month_map.get((enterprise_id, all_months[i]), {}) for i in prior_indices]
+            prior_sales = [float(row.get("approval_amount", 0) or 0) for row in prior_rows]
+            prior_counts = [float(row.get("approval_count", 0) or 0) for row in prior_rows]
+            sales_mean = float(np.mean(prior_sales))
+            count_mean = float(np.mean(prior_counts))
+            current = month_map.get((enterprise_id, latest_month), {})
+            current_sales = float(current.get("approval_amount", 0) or 0)
+            current_count = float(current.get("approval_count", 0) or 0)
+            if sales_mean > 0:
+                sales_below = round(max(0.0, (sales_mean - current_sales) / sales_mean * 100), 1)
+            if count_mean > 0:
+                count_below = round(max(0.0, (count_mean - current_count) / count_mean * 100), 1)
 
-def _reasons(info: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
-    if info.get("sales_change_rate") is not None and info["sales_change_rate"] <= -10:
-        reasons.append("기업 승인금액이 전월 대비 10% 이상 감소")
-    if info.get("transaction_change_rate") is not None and info["transaction_change_rate"] <= -10:
-        reasons.append("기업 승인건수가 전월 대비 10% 이상 감소")
-    if info.get("sales_below_3m_pct", 0) >= 20:
-        reasons.append("기업 승인금액이 직전 3개월 평균보다 20% 이상 낮음")
-    if info.get("transactions_below_3m_pct", 0) >= 20:
-        reasons.append("기업 승인건수가 직전 3개월 평균보다 20% 이상 낮음")
-    if info.get("consecutive_declines", 0) >= 2:
-        reasons.append("기업 월별 승인금액이 연속 하락")
-    if info.get("cancel_ratio", 0) >= 0.2:
-        reasons.append("기업 취소금액/승인금액 비율이 20% 이상")
-    if info.get("partial_cancel_ratio", 0) >= 0.2:
-        reasons.append("기업 부분취소금액/승인금액 비율이 20% 이상")
-    return reasons
-
-
-def _score_enterprises(training: pd.DataFrame, current: pd.DataFrame) -> tuple[list[float | None], dict[str, Any]]:
-    scores: list[float | None] = [None] * len(current)
-    if current.empty:
-        return scores, {"algorithm": "IsolationForest", "status": "NO_COMPANIES_WITH_COMPARABLE_MONTH"}
-    train = training[FEATURES].replace([np.inf, -np.inf], np.nan).fillna(0)
-    now = current[FEATURES].replace([np.inf, -np.inf], np.nan).fillna(0)
-    if len(train) >= 30 and len(train.drop_duplicates()) >= 2:
-        fit_data = train
-        source = "historical_enterprise_months"
-    elif len(now) >= 30 and len(now.drop_duplicates()) >= 2:
-        fit_data = now
-        source = "current_enterprise_cross_section_short_history"
+    if not is_active_now:
+        if last_active_index is None:
+            status = "NO_ACTIVITY"
+            reasons.append("분석기간 전체에서 승인금액과 승인건수가 모두 0입니다.")
+        elif zero_streak >= 3:
+            status = "LONG_INACTIVE"
+            reasons.append(f"최근 {zero_streak}개월 연속으로 승인금액과 승인건수가 모두 0입니다.")
+            reasons.append(f"마지막 승인 실적 월: {last_active_month}")
+        else:
+            status = "RECENTLY_INACTIVE"
+            reasons.append(f"최근 {zero_streak}개월 동안 승인 실적이 없습니다.")
+            reasons.append(f"마지막 승인 실적 월: {last_active_month}")
+    elif len(active_indices) == 1 and active_indices[0] == latest_index:
+        status = "FIRST_ACTIVITY"
+        current = month_map.get((enterprise_id, latest_month), {})
+        reasons.append(f"관측기간 중 이전 승인 실적 없이 {latest_month}에 첫 실적이 발생했습니다.")
+        reasons.append(f"최신월 승인금액 {_json_num(current.get('approval_amount', 0)):,}원 / 승인건수 {_json_num(current.get('approval_count', 0)):,}건")
+    elif prior_zero_streak > 0 and any(active[:-1]):
+        status = "RESTARTED"
+        current = month_map.get((enterprise_id, latest_month), {})
+        reasons.append(f"이전 승인 실적 이후 {prior_zero_streak}개월 미거래 뒤 {latest_month}에 실적이 다시 발생했습니다.")
+        reasons.append(f"최신월 승인금액 {_json_num(current.get('approval_amount', 0)):,}원 / 승인건수 {_json_num(current.get('approval_count', 0)):,}건")
+    elif months_since_first_active < 4:
+        status = "SHORT_HISTORY"
+        reasons.append(f"첫 승인 실적 이후 {months_since_first_active}개월이 관측되어 3개월 평균 추세 비교에 한계가 있습니다.")
+    elif (sales_below is not None and sales_below >= 30) or (count_below is not None and count_below >= 30):
+        status = "DECLINING"
+        if sales_below is not None and sales_below >= 30:
+            reasons.append(f"최신월 승인금액이 직전 3개월 평균보다 {sales_below:.1f}% 낮습니다(운영 기준 30% 이상 감소).")
+        if count_below is not None and count_below >= 30:
+            reasons.append(f"최신월 승인건수가 직전 3개월 평균보다 {count_below:.1f}% 낮습니다(운영 기준 30% 이상 감소).")
     else:
-        return [50.0] * len(current), {"algorithm": "IsolationForest", "status": "INSUFFICIENT_ENTERPRISE_DATA", "fit_source": "none", "training_rows": len(train)}
+        status = "TRADING"
+        current = month_map.get((enterprise_id, latest_month), {})
+        reasons.append(f"최신월 {latest_month}에 승인 실적이 발생했습니다.")
+        if baseline_month_count < 3:
+            reasons.append("직전 3개월 기준 실적이 부족해 매출 감소 여부를 충분히 비교할 수 없습니다.")
+        else:
+            reasons.append("최신월 승인금액·승인건수는 직전 3개월 평균 대비 30% 이상 감소 기준에 해당하지 않습니다.")
 
-    pipeline = Pipeline([
-        ("scale", RobustScaler()),
-        ("model", IsolationForest(n_estimators=300, contamination="auto", random_state=42, n_jobs=-1)),
-    ])
-    pipeline.fit(fit_data)
-    reference = -pipeline.decision_function(fit_data)
-    current_scores = -pipeline.decision_function(now)
-    for i, value in enumerate(current_scores):
-        scores[i] = round(float(np.mean(reference <= value) * 100), 1)
-    return scores, {
-        "algorithm": "IsolationForest",
-        "status": "OK",
-        "fit_source": source,
-        "training_rows": int(len(train)),
-        "scored_enterprises": int(len(current)),
-        "feature_names": FEATURES,
-        "score_definition": "기업별 월간 지표에 대한 이상징후 상대 백분위이며 이탈 확률이 아님",
-        "risk_thresholds": {"HIGH": 98, "MEDIUM": 90, "LOW": 0},
-        "random_state": 42,
+    return {
+        "transaction_status": status,
+        "transaction_status_label": STATUS_LABELS[status],
+        "status_reasons": reasons,
+        "last_active_month": last_active_month,
+        "zero_activity_streak": zero_streak,
+        "active_month_count_3": recent_active_counts["3"],
+        "active_month_count_6": recent_active_counts["6"],
+        "active_month_count_12": recent_active_counts["12"],
+        "sales_below_3m_pct": sales_below,
+        "transactions_below_3m_pct": count_below,
+        "baseline_month_count": baseline_month_count,
+        "months_since_first_active": months_since_first_active,
     }
 
 
@@ -330,7 +387,7 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
     # The source is a transaction activity extract, not a completeness-limited
     # snapshot: an absent enterprise-month row means no approvals took place.
     # Build a dense enterprise x calendar-month grid and explicitly zero-fill it
-    # before calculating comparisons, features, history, and risk scores.
+    # before calculating comparisons, transaction states, and history.
     all_months = pd.period_range(
         start=pd.Period(first_month, freq="M"),
         end=pd.Period(latest_month, freq="M"),
@@ -354,37 +411,20 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
     for _, row in monthly.iterrows():
         month_map[(str(row["enterprise_id"]), str(row["base_month"]))] = {metric: float(row[metric]) for metric in NUMERIC_COLUMNS}
 
-    training_rows: list[dict[str, float]] = []
-    for enterprise_id, month in monthly[["enterprise_id", "base_month"]].itertuples(index=False, name=None):
-        enterprise_id, month = str(enterprise_id), str(month)
-        if month >= latest_month or (enterprise_id, _prev_month(month)) not in month_map:
-            continue
-        features, _ = _feature_for_month(enterprise_id, month, month_map)
-        training_rows.append(features)
-    training = pd.DataFrame(training_rows, columns=FEATURES)
-
+    # Statuses are derived from observed monthly approval activity, using simple
+    # auditable rules instead of a statistical anomaly score or churn probability.
     current_records: list[dict[str, Any]] = []
-    current_features: list[dict[str, float]] = []
     for enterprise_id, enterprise_name in monthly[["enterprise_id", "enterprise_name"]].drop_duplicates().itertuples(index=False, name=None):
         enterprise_id, enterprise_name = str(enterprise_id), str(enterprise_name)
-        current = month_map.get((enterprise_id, latest_month))
-        if current is None:
-            current_records.append({"enterprise_id": enterprise_id, "enterprise_name": enterprise_name, "has_current": False, "features": None, "info": None})
-            continue
-        features, info = _feature_for_month(enterprise_id, latest_month, month_map)
-        if not info["has_previous_month"]:
-            current_records.append({"enterprise_id": enterprise_id, "enterprise_name": enterprise_name, "has_current": True, "features": None, "info": info})
-            continue
-        current_records.append({"enterprise_id": enterprise_id, "enterprise_name": enterprise_name, "has_current": True, "features": features, "info": info})
-        current_features.append({"enterprise_id": enterprise_id, **features})
-
-    current_frame = pd.DataFrame(current_features)
-    if not current_frame.empty:
-        scores, model_info = _score_enterprises(training, current_frame)
-        score_by_id = {str(row["enterprise_id"]): scores[i] for i, (_, row) in enumerate(current_frame.iterrows())}
-    else:
-        model_info = {"algorithm": "IsolationForest", "status": "NO_COMPARABLE_COMPANY_HISTORY", "training_rows": int(len(training))}
-        score_by_id = {}
+        current = month_map.get((enterprise_id, latest_month), {})
+        info = _current_month_metrics(enterprise_id, latest_month, month_map)
+        status_info = _transaction_status(enterprise_id, month_map, all_months, latest_month)
+        info.update(status_info)
+        current_records.append({
+            "enterprise_id": enterprise_id,
+            "enterprise_name": enterprise_name,
+            "info": info,
+        })
 
     names = monthly.drop_duplicates("enterprise_id").set_index("enterprise_id")["enterprise_name"].astype(str).to_dict()
     enterprise_rows: list[dict[str, Any]] = []
@@ -393,22 +433,8 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
         history = monthly.loc[monthly["enterprise_id"].astype(str).eq(enterprise_id)].sort_values("base_month").tail(12)
         record = next(r for r in current_records if r["enterprise_id"] == enterprise_id)
         info = record.get("info") or {}
-        score = score_by_id.get(enterprise_id)
-        if not record.get("has_current") or score is None:
-            risk_level = "UNKNOWN"
-        elif score >= 98:
-            risk_level = "HIGH"
-        elif score >= 90:
-            risk_level = "MEDIUM"
-        else:
-            risk_level = "LOW"
-        reasons = _reasons(info) if info else []
-        if risk_level == "HIGH":
-            reasons.insert(0, "기업 단위 월간 패턴이 기준 분포에서 매우 이례적")
-        elif risk_level == "MEDIUM":
-            reasons.insert(0, "기업 단위 월간 패턴에 확인이 필요한 이상징후가 있음")
-        if risk_level == "UNKNOWN":
-            reasons.append("최신월 또는 전월 비교 데이터가 부족하여 점수를 계산할 수 없음")
+        status = info.get("transaction_status", "NO_ACTIVITY")
+        reasons = info.get("status_reasons", [])
 
         history_json = [
             {"month": f"{str(row['base_month'])[:4]}-{str(row['base_month'])[5:7]}",
@@ -431,33 +457,51 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
             "enterprise_id": enterprise_id,
             "enterprise_name": names[enterprise_id],
             "display_name": names[enterprise_id],
-            "risk_level": risk_level,
-            "risk_score": score,
+            "transaction_status": status,
+            "transaction_status_label": info.get("transaction_status_label", STATUS_LABELS[status]),
             "sales_change_rate": info.get("sales_change_rate"),
             "transaction_change_rate": info.get("transaction_change_rate"),
             "sales_below_3m_pct": info.get("sales_below_3m_pct"),
             "transactions_below_3m_pct": info.get("transactions_below_3m_pct"),
             "baseline_month_count": info.get("baseline_month_count", 0),
+            "last_active_month": info.get("last_active_month"),
+            "zero_activity_streak": info.get("zero_activity_streak", 0),
+            "active_month_count_3": info.get("active_month_count_3", 0),
+            "active_month_count_6": info.get("active_month_count_6", 0),
+            "active_month_count_12": info.get("active_month_count_12", 0),
+            "months_since_first_active": info.get("months_since_first_active", 0),
             "current_approval_amount": _json_num(info.get("current_approval_amount", 0)),
             "current_approval_count": _json_num(info.get("current_approval_count", 0)),
             "previous_approval_amount": _json_num(info.get("previous_approval_amount", 0) or 0),
             "previous_approval_count": _json_num(info.get("previous_approval_count", 0) or 0),
-            "risk_reasons": reasons,
+            "status_reasons": reasons,
             "monthly_sales": history_json,
             "payment_method_analysis": payment_method_analysis,
             "financial_company_analysis": financial_company_analysis,
         })
 
-    ordering = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3}
-    enterprise_rows.sort(key=lambda e: (ordering.get(e["risk_level"], 9), -(e["risk_score"] or 0), e["enterprise_name"], e["enterprise_id"]))
+    enterprise_rows.sort(key=lambda e: (STATUS_ORDER.get(e["transaction_status"], 99), e["enterprise_name"], e["enterprise_id"]))
 
     monthly_totals = monthly.groupby("base_month", as_index=False)[list(NUMERIC_COLUMNS)].sum().sort_values("base_month").tail(12)
+    status_counts = {
+        status: sum(e["transaction_status"] == status for e in enterprise_rows)
+        for status in STATUS_LABELS
+    }
+    current_trading_count = sum(
+        _has_activity(month_map.get((str(e["enterprise_id"]), latest_month)))
+        for e in enterprise_rows
+    )
     summary = {
         "enterprise_count": len(enterprise_rows),
-        "high_risk_enterprise_count": sum(e["risk_level"] == "HIGH" for e in enterprise_rows),
-        "medium_risk_enterprise_count": sum(e["risk_level"] == "MEDIUM" for e in enterprise_rows),
-        "low_risk_enterprise_count": sum(e["risk_level"] == "LOW" for e in enterprise_rows),
-        "unknown_enterprise_count": sum(e["risk_level"] == "UNKNOWN" for e in enterprise_rows),
+        "currently_trading_enterprise_count": current_trading_count,
+        "declining_enterprise_count": status_counts["DECLINING"],
+        "recently_inactive_enterprise_count": status_counts["RECENTLY_INACTIVE"],
+        "long_inactive_enterprise_count": status_counts["LONG_INACTIVE"],
+        "restarted_enterprise_count": status_counts["RESTARTED"],
+        "first_activity_enterprise_count": status_counts["FIRST_ACTIVITY"],
+        "short_history_enterprise_count": status_counts["SHORT_HISTORY"],
+        "no_activity_enterprise_count": status_counts["NO_ACTIVITY"],
+        "transaction_status_counts": status_counts,
     }
     latest_date = pd.Timestamp(df.loc[df["base_month"].eq(latest_month), "base_date"].max()).normalize()
     return {
@@ -468,11 +512,20 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
         "source_row_count": int(len(df)),
         "source_date_from": pd.Timestamp(df["base_date"].min()).strftime("%Y-%m-%d"),
         "source_date_to": latest_date.strftime("%Y-%m-%d"),
-        "method": "enterprise_month_isolation_forest_v2_zero_fill",
+        "method": "enterprise_month_transaction_status_v1_zero_fill",
         "dimension_aggregation_policy": "Monthly enterprise aggregates are additionally grouped by payment method and financial company; absent enterprise-dimension-month rows are zero-filled.",
         "zero_fill_policy": "An absent enterprise-month record is interpreted as 0 approval amount and 0 approval count (no payments), not missing data.",
-        "model_info": model_info,
-        "notice": "기업 단위 월간 집계와 결제수단(카드/계좌)·금융회사별 집계만 분석했습니다. 기업/결제수단/금융회사 기준으로 특정 월에 거래 행이 없으면 해당 월 승인금액과 승인건수를 0으로 처리했습니다(결제 없음). 개별 가맹점 분석은 수행하거나 공개하지 않습니다. Isolation Forest 점수는 기업 거래 패턴 대비 이상징후 상대 점수이며 이탈 확률이 아닙니다. 외부 원인은 별도 근거가 있는 경우에만 추가 검토해야 합니다.",
+        "status_policy": {
+            "TRADING": "최신월 승인금액 또는 승인건수가 양수이고, 직전 3개월 평균 대비 30% 이상 감소 기준에 해당하지 않음",
+            "DECLINING": "최신월 승인금액 또는 승인건수가 해당 지표의 직전 3개월 평균보다 30% 이상 낮음(3개월 비교 기준이 있는 경우)",
+            "RECENTLY_INACTIVE": "최신월 거래가 없고, 과거 거래가 있으며 연속 미거래가 1~2개월",
+            "LONG_INACTIVE": "최신월 거래가 없고 과거 거래가 있으며 연속 미거래가 3개월 이상",
+            "RESTARTED": "과거 거래가 있고 1개월 이상 미거래 후 최신월 거래가 재발생",
+            "FIRST_ACTIVITY": "분석기간에 최신월 이전 승인 실적이 없고 최신월에 첫 승인 실적 발생",
+            "SHORT_HISTORY": "최초 거래 이후 4개월 미만이어서 직전 3개월 비교 이력이 부족",
+            "NO_ACTIVITY": "분석기간 전체에서 승인금액과 승인건수가 모두 0",
+        },
+        "notice": "위험·주의·낮은 위험 점수 등급과 Isolation Forest 점수를 제거했습니다. 표시되는 거래 상태는 기업별 월간 승인금액·승인건수의 관측 사실과 명시된 규칙으로 산출한 현재/과거 거래활동 상태이며, 재무제표 기반 기업 건전성이나 미래 이탈 확률을 뜻하지 않습니다. 거래가 없던 월은 승인금액·승인건수를 0으로 처리했습니다. 직전 3개월 평균보다 30% 이상 낮은 경우 거래 감소 관찰로 표시합니다. 개별 가맹점 내역은 출력하지 않습니다.",
         "numeric_blank_counts": blank_counts,
         "summary": summary,
         "enterprises": enterprise_rows,
@@ -497,7 +550,7 @@ def main() -> None:
     temp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(target)
     summary = result["summary"]
-    print(f"기업 단위 분석 완료 | 원본행={result['source_row_count']:,} | 기업={summary['enterprise_count']:,} | 고위험={summary['high_risk_enterprise_count']:,} | 주의={summary['medium_risk_enterprise_count']:,}")
+    print(f"기업 단위 분석 완료 | 원본행={result['source_row_count']:,} | 기업={summary['enterprise_count']:,} | 현재 거래={summary['currently_trading_enterprise_count']:,} | 장기 미거래={summary['long_inactive_enterprise_count']:,} | 거래 감소 관찰={summary['declining_enterprise_count']:,}")
 
 
 if __name__ == "__main__":

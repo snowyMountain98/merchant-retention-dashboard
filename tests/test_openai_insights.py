@@ -11,7 +11,7 @@ def sample_data():
     return {
         "analysis_month": "2026-09",
         "as_of_date": "2026-09-30",
-        "summary": {"enterprise_count": 2, "high_risk_enterprise_count": 1, "medium_risk_enterprise_count": 1},
+        "summary": {"enterprise_count": 2, "long_inactive_enterprise_count": 1, "declining_enterprise_count": 1},
         "monthly_sales": [
             {"month": "2026-08", "approval_amount": 2000, "approval_count": 20},
             {"month": "2026-09", "approval_amount": 1800, "approval_count": 18},
@@ -19,15 +19,19 @@ def sample_data():
         "enterprises": [
             {
                 "enterprise_id": "MASKED_ID_1", "enterprise_name": "마스킹기업 A", "display_name": "마스킹기업 A",
-                "risk_level": "HIGH", "risk_score": 99.1,
-                "merchant_count": 3, "current_approval_amount": 800, "previous_approval_amount": 1500,
+                "transaction_status": "DECLINING", "transaction_status_label": "거래 감소 관찰",
+                "status_reasons": ["최신월 승인금액이 직전 3개월 평균보다 35% 낮습니다."],
+                "current_approval_amount": 800, "current_approval_count": 8, "previous_approval_amount": 1500,
                 "sales_change_rate": -46.7, "transaction_change_rate": -35,
+                "sales_below_3m_pct": 35, "transactions_below_3m_pct": 30,
+                "last_active_month": "2026-09", "zero_activity_streak": 0,
                 "monthly_sales": [{"month": "2026-09", "approval_amount": 800, "approval_count": 8}],
             },
             {
                 "enterprise_id": "MASKED_ID_2", "enterprise_name": "마스킹기업 B", "display_name": "마스킹기업 B",
-                "risk_level": "MEDIUM", "risk_score": 92.5,
-                "merchant_count": 2, "current_approval_amount": 900, "previous_approval_amount": 1000,
+                "transaction_status": "TRADING", "transaction_status_label": "거래 유지 중",
+                "status_reasons": ["최신월 승인 실적이 발생했습니다."],
+                "current_approval_amount": 900, "current_approval_count": 9, "previous_approval_amount": 1000,
                 "sales_change_rate": -10.0, "transaction_change_rate": -8.0,
                 "monthly_sales": [
                     {"month": "2026-08", "approval_amount": 1000, "approval_count": 10},
@@ -48,6 +52,7 @@ def test_openai_payloads_contain_only_opaque_enterprise_refs_and_aggregates():
     assert "display_name" not in payload_json
     assert "merchant_id" not in payload_json
     assert "SECRET_MERCHANT" not in payload_json
+    assert "risk_level" not in payload_json and "risk_score" not in payload_json
 
 
 def test_portfolio_payload_is_aggregate_only():
@@ -56,6 +61,8 @@ def test_portfolio_payload_is_aggregate_only():
     assert payload["enterprise_metrics"]["enterprise_count"] == 2
     assert "merchant_id" not in payload_json
     assert "SECRET_MERCHANT" not in payload_json
+    assert "transaction_status_distribution" in payload
+    assert "risk_distribution" not in payload
 
 
 def test_generate_insights_keeps_enterprise_only_and_no_search_analysis():
@@ -95,4 +102,8 @@ def test_generate_insights_keeps_enterprise_only_and_no_search_analysis():
     company_instructions = next(instructions for schema_name, instructions, _ in calls if schema_name == "company_insights")
     assert "데이터 누락이 아니라 해당 월 결제 없음" in company_instructions
     assert "100% 감소" in company_instructions
+    assert "위험 등급" in company_instructions
+    assert "미래 거래 유지 가능성을 확정하지 마세요" in company_instructions
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "risk_level" not in serialized and "risk_score" not in serialized
     serialized = json.dumps(result, ensure_ascii=False)

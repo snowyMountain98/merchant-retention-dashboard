@@ -42,7 +42,10 @@ def test_builds_only_enterprise_level_output_and_preserves_masked_names(tmp_path
     assert target["monthly_sales"][-1]["approval_count"] == 0
     assert target["sales_change_rate"] == -100.0
     assert target["transaction_change_rate"] == -100.0
-    assert any("10% 이상 감소" in reason for reason in target["risk_reasons"])
+    assert target["transaction_status"] == "RECENTLY_INACTIVE"
+    assert target["transaction_status_label"] == "최근 미거래"
+    assert any("최근 1개월" in reason for reason in target["status_reasons"])
+    assert "risk_level" not in target and "risk_score" not in target and "risk_reasons" not in target
     assert all("merchant_id" not in row and "merchant_name" not in row for row in result["enterprises"])
 
 
@@ -77,7 +80,8 @@ def test_zero_payments_in_two_consecutive_months_are_not_marked_unknown(tmp_path
     target = next(e for e in result["enterprises"] if e["enterprise_id"] == "1999")
     assert [m["month"] for m in target["monthly_sales"]] == ["2026-05", "2026-06", "2026-07"]
     assert [(m["approval_amount"], m["approval_count"]) for m in target["monthly_sales"][-2:]] == [(0, 0), (0, 0)]
-    assert target["risk_level"] != "UNKNOWN"
+    assert target["transaction_status"] == "RECENTLY_INACTIVE"
+    assert target["zero_activity_streak"] == 2
     assert target["sales_change_rate"] == 0.0
     assert target["transaction_change_rate"] == 0.0
 
@@ -114,3 +118,38 @@ def test_payment_method_and_financial_company_analyses_are_aggregated_and_zero_f
         assert finance_amount == month["approval_amount"]
     payload = __import__("json").dumps(result, ensure_ascii=False)
     assert "SECRET_MERCHANT" not in payload and "merchant_id" not in payload
+
+
+def test_transaction_statuses_describe_observed_activity_not_anomaly_scores(tmp_path):
+    rows = []
+    monthly_values = {
+        "2026-01": [("A", "장기 미거래", 1000, 10), ("B", "최근 미거래", 500, 5), ("C", "거래 유지", 1000, 10), ("D", "감소 관찰", 1000, 10), ("E", "거래 재개", 500, 5)],
+        "2026-02": [("A", "장기 미거래", 1000, 10), ("B", "최근 미거래", 500, 5), ("C", "거래 유지", 1000, 10), ("D", "감소 관찰", 1000, 10), ("E", "거래 재개", 500, 5)],
+        "2026-03": [("A", "장기 미거래", 1000, 10), ("B", "최근 미거래", 500, 5), ("C", "거래 유지", 1000, 10), ("D", "감소 관찰", 1000, 10), ("E", "거래 재개", 500, 5)],
+        "2026-04": [("B", "최근 미거래", 500, 5), ("C", "거래 유지", 1000, 10), ("D", "감소 관찰", 1000, 10), ("E", "거래 재개", 500, 5)],
+        "2026-05": [("B", "최근 미거래", 500, 5), ("C", "거래 유지", 1000, 10), ("D", "감소 관찰", 1000, 10)],
+        "2026-06": [("C", "거래 유지", 1000, 10), ("D", "감소 관찰", 600, 6), ("E", "거래 재개", 650, 7), ("F", "첫 거래", 700, 7)],
+    }
+    for month, entries in monthly_values.items():
+        for enterprise_id, enterprise_name, amount, count in entries:
+            rows.append({
+                "기업관리번호": enterprise_id, "기업명": enterprise_name,
+                "집계년월": month.replace("-", ""), "집계년월일": month.replace("-", "") + "15",
+                "결제수단": "카드", "금융회사": "신한카드",
+                "승인건수": count, "승인금액": amount, "취소건수": 0, "취소금액": 0,
+                "부분취소건수": 0, "부분취소금액": 0,
+            })
+    source = tmp_path / "synthetic_transaction_states.xlsx"
+    pd.DataFrame(rows).to_excel(source, index=False)
+
+    result = build_enterprise_dashboard(source)
+    by_id = {company["enterprise_id"]: company for company in result["enterprises"]}
+    assert by_id["A"]["transaction_status"] == "LONG_INACTIVE"
+    assert by_id["B"]["transaction_status"] == "RECENTLY_INACTIVE"
+    assert by_id["C"]["transaction_status"] == "TRADING"
+    assert by_id["D"]["transaction_status"] == "DECLINING"
+    assert by_id["E"]["transaction_status"] == "RESTARTED"
+    assert by_id["F"]["transaction_status"] == "FIRST_ACTIVITY"
+    assert result["summary"]["long_inactive_enterprise_count"] == 1
+    assert all("risk_level" not in company and "risk_score" not in company for company in result["enterprises"])
+    assert result["method"] == "enterprise_month_transaction_status_v1_zero_fill"

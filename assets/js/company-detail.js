@@ -1,7 +1,7 @@
 const DATA_URL = 'public-data/dashboard_summary.json';
 const fmt = new Intl.NumberFormat('ko-KR');
 const money = value => `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(value ?? 0)}원`;
-const labels = { HIGH: '위험', MEDIUM: '주의', LOW: '낮은 위험', UNKNOWN: '확인 필요' };
+const labels = { LONG_INACTIVE: '장기 미거래', RECENTLY_INACTIVE: '최근 미거래', DECLINING: '거래 감소 관찰', NO_ACTIVITY: '관측기간 내 거래 없음', RESTARTED: '거래 재개', FIRST_ACTIVITY: '최근 관측기간 첫 거래', SHORT_HISTORY: '거래 이력 짧음', TRADING: '거래 유지 중' };
 let chart = null;
 let paymentMethodChart = null;
 let financialCompanyChart = null;
@@ -22,9 +22,9 @@ async function init() {
   document.getElementById('enterprise-name').textContent = enterprise.enterprise_name || '기업명 없음';
   document.getElementById('enterprise-id').textContent = enterprise.enterprise_id;
   document.getElementById('analysis-month').textContent = data.analysis_month || '—';
-  const risk = document.getElementById('enterprise-risk');
-  risk.className = `level-chip ${enterprise.risk_level || 'UNKNOWN'}`;
-  risk.textContent = labels[enterprise.risk_level] || labels.UNKNOWN;
+  const status = document.getElementById('enterprise-status');
+  status.className = `level-chip ${enterprise.transaction_status || 'SHORT_HISTORY'}`;
+  status.textContent = enterprise.transaction_status_label || labels[enterprise.transaction_status] || '상태 확인 필요';
   document.getElementById('approval-amount').textContent = money(enterprise.current_approval_amount);
   document.getElementById('sales-change').innerHTML = formatRate(enterprise.sales_change_rate);
   document.getElementById('count-change').innerHTML = formatRate(enterprise.transaction_change_rate);
@@ -32,8 +32,12 @@ async function init() {
   document.getElementById('sales-baseline-change').textContent =
     Number(enterprise.baseline_month_count || 0) < 1 ? '비교 이력 부족' :
     baselineDrop == null ? 'N/A' : Number(baselineDrop) > 0 ? `${Number(baselineDrop).toFixed(1)}% 낮음` : '뚜렷한 하락 없음';
+  document.getElementById('active-months-3').textContent = `${Number(enterprise.active_month_count_3 || 0)} / 3개월`;
+  document.getElementById('active-months-6').textContent = `${Number(enterprise.active_month_count_6 || 0)} / 6개월`;
+  document.getElementById('zero-streak').textContent = `${Number(enterprise.zero_activity_streak || 0)}개월`;
+  document.getElementById('last-active-month').textContent = enterprise.last_active_month || '해당 기간 내 없음';
   document.getElementById('detail-notice').textContent =
-    data.notice || '기업 단위 요약입니다. AI 진단은 참고 정보이며 이탈 확률을 의미하지 않습니다.';
+    data.notice || '거래 상태는 월별 승인 실적을 바탕으로 산정하며 미래 이탈 확률이나 재무제표 기반 건전성 판정이 아닙니다.';
   renderCompanyAI(enterprise.openai_insight);
   renderCompanyChart();
   renderCompanySignals();
@@ -81,11 +85,11 @@ function renderCompanyChart() {
 }
 
 function renderCompanySignals() {
-  const reasons = Array.isArray(enterprise.risk_reasons) ? enterprise.risk_reasons : [];
+  const reasons = Array.isArray(enterprise.status_reasons) ? enterprise.status_reasons : [];
   const target = document.getElementById('company-signal-list');
   target.innerHTML = reasons.length
     ? reasons.map(reason => `<span class="reason-tag">${esc(reason)}</span>`).join('')
-    : '<p class="empty-reasons">현재 확인할 주요 신호가 없습니다.</p>';
+    : '<p class="empty-reasons">표시할 거래 상태 근거가 없습니다.</p>'; 
 }
 
 function renderMonthlyTable() {
