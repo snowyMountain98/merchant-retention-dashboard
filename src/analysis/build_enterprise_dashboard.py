@@ -99,8 +99,13 @@ def _prev_month(month: str, offset: int = 1) -> str:
 
 
 def _percent(current: float | None, previous: float | None) -> float | None:
-    if current is None or previous is None or previous == 0:
+    if current is None or previous is None:
         return None
+    # When both months have no payments, activity is unchanged (0% change).
+    # If the prior month was zero but this month is positive, a percentage change
+    # is mathematically undefined; keep None rather than fabricate an infinite rate.
+    if previous == 0:
+        return 0.0 if current == 0 else None
     return round((current - previous) / previous * 100, 1)
 
 
@@ -264,8 +269,35 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
         else:
             df[target], blank_counts[source_col] = _number_series(df[source_col], source_col)
 
-    monthly = df.groupby(["enterprise_id", "enterprise_name", "base_month"], as_index=False)[list(NUMERIC_COLUMNS)].sum()
-    latest_month = str(monthly["base_month"].max())
+    observed_monthly = df.groupby(
+        ["enterprise_id", "enterprise_name", "base_month"], as_index=False
+    )[list(NUMERIC_COLUMNS)].sum()
+    first_month = str(observed_monthly["base_month"].min())
+    latest_month = str(observed_monthly["base_month"].max())
+
+    # The source is a transaction activity extract, not a completeness-limited
+    # snapshot: an absent enterprise-month row means no approvals took place.
+    # Build a dense enterprise x calendar-month grid and explicitly zero-fill it
+    # before calculating comparisons, features, history, and risk scores.
+    all_months = pd.period_range(
+        start=pd.Period(first_month, freq="M"),
+        end=pd.Period(latest_month, freq="M"),
+        freq="M",
+    ).astype(str).tolist()
+    companies = df[["enterprise_id", "enterprise_name"]].drop_duplicates()
+    month_frame = pd.DataFrame({"base_month": all_months})
+    companies = companies.assign(_grid_key=1)
+    month_frame = month_frame.assign(_grid_key=1)
+    grid = companies.merge(month_frame, on="_grid_key", how="inner").drop(columns="_grid_key")
+    monthly = grid.merge(
+        observed_monthly,
+        on=["enterprise_id", "enterprise_name", "base_month"],
+        how="left",
+        validate="one_to_one",
+    )
+    monthly[list(NUMERIC_COLUMNS)] = monthly[list(NUMERIC_COLUMNS)].fillna(0)
+    monthly = monthly.sort_values(["enterprise_id", "base_month"]).reset_index(drop=True)
+
     month_map: dict[tuple[str, str], dict[str, float]] = {}
     for _, row in monthly.iterrows():
         month_map[(str(row["enterprise_id"]), str(row["base_month"]))] = {metric: float(row[metric]) for metric in NUMERIC_COLUMNS}
@@ -375,9 +407,10 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
         "source_row_count": int(len(df)),
         "source_date_from": pd.Timestamp(df["base_date"].min()).strftime("%Y-%m-%d"),
         "source_date_to": latest_date.strftime("%Y-%m-%d"),
-        "method": "enterprise_month_isolation_forest_v1",
+        "method": "enterprise_month_isolation_forest_v2_zero_fill",
+        "zero_fill_policy": "An absent enterprise-month record is interpreted as 0 approval amount and 0 approval count (no payments), not missing data.",
         "model_info": model_info,
-        "notice": "기업별 월간 집계만 분석했습니다. 개별 가맹점 분석은 수행하거나 공개하지 않습니다. Isolation Forest 점수는 기업 거래 패턴 대비 이상징후 상대 점수이며 이탈 확률이 아닙니다. 외부 원인은 별도 근거가 있는 경우에만 추가 검토해야 합니다.",
+        "notice": "기업별 월간 집계만 분석했습니다. 원본에 특정 기업의 월별 행이 없으면 해당 월 승인금액과 승인건수를 0으로 처리했습니다(결제 없음). 개별 가맹점 분석은 수행하거나 공개하지 않습니다. Isolation Forest 점수는 기업 거래 패턴 대비 이상징후 상대 점수이며 이탈 확률이 아닙니다. 외부 원인은 별도 근거가 있는 경우에만 추가 검토해야 합니다.",
         "numeric_blank_counts": blank_counts,
         "summary": summary,
         "enterprises": enterprise_rows,

@@ -92,4 +92,7 @@ def test_generate_insights_keeps_enterprise_only_and_no_search_analysis():
     assert "openai_portfolio_insight" in result
     assert result["openai_metadata"]["status"] == "success"
     assert result["openai_metadata"]["scope"] == "enterprise_only"
+    company_instructions = next(instructions for schema_name, instructions, _ in calls if schema_name == "company_insights")
+    assert "데이터 누락이 아니라 해당 월 결제 없음" in company_instructions
+    assert "100% 감소" in company_instructions
     serialized = json.dumps(result, ensure_ascii=False)
