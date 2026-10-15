@@ -37,11 +37,29 @@
       <article class="panel chart-panel"><div class="panel-head"><div><h2>월별 승인금액 추이</h2><p>기업 단위 승인금액 합계</p></div><span class="mini-tag">TREND</span></div><div class="chart-wrap"><canvas id="company-sales-chart"></canvas></div></article>
       <article class="panel"><div class="panel-head"><div><h2>기업 단위 주요 신호</h2><p>월별 실적에서 계산한 확인 항목</p></div></div><div id="company-signal-list" class="reason-list"></div><div class="score-note">개별 가맹점별 점수나 내역은 표시하지 않습니다.</div></article>
     </section>
+    <section class="panel breakdown-panel" id="payment-method-analysis">
+      <div class="panel-head"><div><h2>카드·계좌별 분석</h2><p>선택한 기업의 결제수단별 승인 실적과 월별 변화를 비교합니다.</p></div><span class="mini-tag">PAYMENT METHOD</span></div>
+      <div class="analysis-grid">
+        <article class="analysis-card"><h3>월별 승인금액 추이</h3><div class="chart-wrap"><canvas id="payment-method-chart"></canvas></div></article>
+        <article class="analysis-card"><h3>최근 집계월 결제수단 구성</h3><div class="table-scroll"><table><thead><tr><th>결제수단</th><th>승인금액</th><th>금액 점유율</th><th>금액 전월 대비</th><th>승인건수</th><th>건수 전월 대비</th></tr></thead><tbody id="payment-method-rows"><tr><td colspan="6">분석 데이터를 불러오는 중입니다.</td></tr></tbody></table></div></article>
+      </div>
+      <p class="table-footnote">월별 행이 없는 결제수단은 해당 월 승인금액·승인건수를 0으로 집계합니다. 점유율은 해당 기업의 최신 집계월 승인금액 합계 기준입니다.</p>
+    </section>
+    <section class="panel breakdown-panel" id="financial-company-analysis">
+      <div class="panel-head"><div><h2>금융회사별 분석</h2><p>금융회사별 실적 순위와 선택 금융회사의 월별 추이를 확인합니다.</p></div><span class="mini-tag">FINANCIAL COMPANY</span></div>
+      <div class="analysis-grid">
+        <article class="analysis-card"><h3>최근 집계월 승인금액 상위 10개 금융회사</h3><div class="chart-wrap"><canvas id="financial-company-chart"></canvas></div></article>
+        <article class="analysis-card"><div class="analysis-card-head"><h3>선택 금융회사 월별 추이</h3><label class="select-label" for="financial-company-select">금융회사</label><select id="financial-company-select" class="analysis-select"><option value="">데이터를 불러오는 중</option></select></div><div class="chart-wrap"><canvas id="financial-trend-chart"></canvas></div></article>
+      </div>
+      <div class="analysis-table-heading"><h3>금융회사별 최신 실적</h3><p>전체 금융회사를 최신 승인금액 기준으로 정렬했습니다.</p></div>
+      <div class="table-scroll"><table><thead><tr><th>금융회사</th><th>최근 승인금액</th><th>금액 점유율</th><th>금액 전월 대비</th><th>최근 승인건수</th><th>건수 전월 대비</th></tr></thead><tbody id="financial-company-rows"><tr><td colspan="6">분석 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
+      <p class="table-footnote">점유율은 해당 기업의 최신 집계월 전체 승인금액 중 금융회사별 비중입니다. 승인금액이 0인 달은 결제 없음으로 표시하며, 전월이 0일 때 증감률은 계산하지 않습니다.</p>
+    </section>
     <section class="panel">
       <div class="panel-head"><div><h2>월별 실적 및 변동</h2><p>승인금액과 승인건수의 기업 단위 합계</p></div></div>
       <div class="table-scroll"><table><thead><tr><th>집계월</th><th>승인금액</th><th>전월 대비</th><th>승인건수</th><th>건수 증감</th></tr></thead><tbody id="monthly-rows"><tr><td colspan="5">데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
     </section>
-    <footer>Enterprise Retention Dashboard · Company-level analysis only</footer>
+    <footer>Enterprise Retention Dashboard · Enterprise, payment method & financial company analysis</footer>
   </main>
 </body>
 </html>

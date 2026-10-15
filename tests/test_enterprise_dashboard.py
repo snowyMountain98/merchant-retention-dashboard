@@ -19,6 +19,8 @@ def test_builds_only_enterprise_level_output_and_preserves_masked_names(tmp_path
                 "기업명": enterprise_name,
                 "집계년월": month.replace("-", ""),
                 "집계년월일": date,
+                "결제수단": "카드",
+                "금융회사": "신한카드",
                 "승인건수": count,
                 "승인금액": amount,
                 "취소건수": 0,
@@ -59,6 +61,8 @@ def test_zero_payments_in_two_consecutive_months_are_not_marked_unknown(tmp_path
                 "기업명": enterprise_name,
                 "집계년월": month.replace("-", ""),
                 "집계년월일": date,
+                "결제수단": "카드",
+                "금융회사": "신한카드",
                 "승인건수": count,
                 "승인금액": amount,
                 "취소건수": 0,
@@ -76,3 +80,37 @@ def test_zero_payments_in_two_consecutive_months_are_not_marked_unknown(tmp_path
     assert target["risk_level"] != "UNKNOWN"
     assert target["sales_change_rate"] == 0.0
     assert target["transaction_change_rate"] == 0.0
+
+
+def test_payment_method_and_financial_company_analyses_are_aggregated_and_zero_filled(tmp_path):
+    rows = [
+        {"기업관리번호": "A1", "기업명": "마스킹기업 A", "집계년월": "202605", "집계년월일": "20260515", "결제수단": "카드", "금융회사": "신한카드", "승인건수": 6, "승인금액": 600, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+        {"기업관리번호": "A1", "기업명": "마스킹기업 A", "집계년월": "202605", "집계년월일": "20260515", "결제수단": "계좌", "금융회사": "KB국민은행", "승인건수": 4, "승인금액": 400, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+        {"기업관리번호": "A1", "기업명": "마스킹기업 A", "집계년월": "202606", "집계년월일": "20260615", "결제수단": "카드", "금융회사": "신한카드", "승인건수": 2, "승인금액": 200, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+        {"기업관리번호": "A1", "기업명": "마스킹기업 A", "집계년월": "202606", "집계년월일": "20260615", "결제수단": "계좌", "금융회사": "KB국민은행", "승인건수": 8, "승인금액": 800, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+        {"기업관리번호": "B2", "기업명": "마스킹기업 B", "집계년월": "202605", "집계년월일": "20260515", "결제수단": "카드", "금융회사": "현대카드", "승인건수": 10, "승인금액": 1200, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+        {"기업관리번호": "B2", "기업명": "마스킹기업 B", "집계년월": "202606", "집계년월일": "20260615", "결제수단": "카드", "금융회사": "현대카드", "승인건수": 11, "승인금액": 1300, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+        {"기업관리번호": "B2", "기업명": "마스킹기업 B", "집계년월": "202607", "집계년월일": "20260715", "결제수단": "카드", "금융회사": "현대카드", "승인건수": 12, "승인금액": 1400, "취소건수": 0, "취소금액": 0, "부분취소건수": 0, "부분취소금액": 0},
+    ]
+    source = tmp_path / "synthetic_dimensions.xlsx"
+    pd.DataFrame(rows).to_excel(source, index=False)
+
+    result = build_enterprise_dashboard(source)
+    target = next(e for e in result["enterprises"] if e["enterprise_id"] == "A1")
+    methods = {x["payment_method"]: x["monthly_sales"] for x in target["payment_method_analysis"]}
+    finance = {x["financial_company"]: x["monthly_sales"] for x in target["financial_company_analysis"]}
+    assert set(methods) == {"카드", "계좌"}
+    assert methods["카드"][0]["approval_amount"] == 600
+    assert methods["계좌"][1]["approval_amount"] == 800
+    assert methods["카드"][2]["approval_amount"] == 0
+    assert methods["계좌"][2]["approval_count"] == 0
+    assert finance["신한카드"][1]["approval_amount"] == 200
+    assert finance["KB국민은행"][2]["approval_amount"] == 0
+    for month in target["monthly_sales"]:
+        month_id = month["month"]
+        method_amount = sum(next(row["approval_amount"] for row in item["monthly_sales"] if row["month"] == month_id) for item in target["payment_method_analysis"])
+        finance_amount = sum(next(row["approval_amount"] for row in item["monthly_sales"] if row["month"] == month_id) for item in target["financial_company_analysis"])
+        assert method_amount == month["approval_amount"]
+        assert finance_amount == month["approval_amount"]
+    payload = __import__("json").dumps(result, ensure_ascii=False)
+    assert "SECRET_MERCHANT" not in payload and "merchant_id" not in payload

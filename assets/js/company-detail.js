@@ -3,6 +3,9 @@ const fmt = new Intl.NumberFormat('ko-KR');
 const money = value => `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(value ?? 0)}원`;
 const labels = { HIGH: '위험', MEDIUM: '주의', LOW: '낮은 위험', UNKNOWN: '확인 필요' };
 let chart = null;
+let paymentMethodChart = null;
+let financialCompanyChart = null;
+let financialTrendChart = null;
 let data = null;
 let enterprise = null;
 
@@ -35,6 +38,8 @@ async function init() {
   renderCompanyChart();
   renderCompanySignals();
   renderMonthlyTable();
+  renderPaymentMethodAnalysis();
+  renderFinancialCompanyAnalysis();
 }
 
 function renderCompanyAI(insight) {
@@ -106,6 +111,145 @@ function renderMonthlyTable() {
       <td>${formatRate(countRate)}</td>
     </tr>`;
   }).join('');
+}
+
+function renderPaymentMethodAnalysis() {
+  const series = Array.isArray(enterprise.payment_method_analysis) ? enterprise.payment_method_analysis : [];
+  const table = document.getElementById('payment-method-rows');
+  const preferredOrder = ['카드', '계좌'];
+  const rows = [...series].sort((a, b) => {
+    const ai = preferredOrder.indexOf(a.payment_method);
+    const bi = preferredOrder.indexOf(b.payment_method);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || String(a.payment_method).localeCompare(String(b.payment_method), 'ko');
+  });
+  if (!rows.length) {
+    table.innerHTML = '<tr><td colspan="6">결제수단별 집계 데이터가 없습니다. 최신 분석을 실행해 주세요.</td></tr>';
+    return;
+  }
+
+  const latestMonth = String(data.analysis_month || '');
+  const latestRows = rows.map(item => ({
+    label: item.payment_method,
+    current: getDimensionMonth(item.monthly_sales, latestMonth),
+    previous: getPreviousDimensionMonth(item.monthly_sales, latestMonth),
+    history: item.monthly_sales || []
+  }));
+  const totalAmount = latestRows.reduce((sum, item) => sum + number(item.current?.approval_amount), 0);
+  table.innerHTML = latestRows.map(item => {
+    const amount = number(item.current?.approval_amount);
+    const count = number(item.current?.approval_count);
+    const share = totalAmount > 0 ? amount / totalAmount * 100 : 0;
+    return `<tr><td>${esc(item.label)}</td><td>${money(amount)}</td><td>${share.toFixed(1)}%</td><td>${formatRate(compareDimension(item.current, item.previous, 'approval_amount'))}</td><td>${fmt.format(count)}</td><td>${formatRate(compareDimension(item.current, item.previous, 'approval_count'))}</td></tr>`;
+  }).join('');
+
+  if (!window.Chart) return;
+  const labels = latestRows[0].history.map(item => item.month);
+  const palette = { '카드': '#e7ad05', '계좌': '#4977c9' };
+  if (paymentMethodChart) paymentMethodChart.destroy();
+  paymentMethodChart = new Chart(document.getElementById('payment-method-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: latestRows.map(item => ({
+        label: item.label,
+        data: item.history.map(month => number(month.approval_amount)),
+        borderColor: palette[item.label] || '#7b8494',
+        backgroundColor: palette[item.label] || '#7b8494',
+        tension: .28, pointRadius: 3, fill: false
+      }))
+    },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'bottom' }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${money(c.raw)}` } } },
+      scales: { y: { beginAtZero: true, ticks: { callback: v => fmt.format(v) }, grid: { color: '#eff0f3' } }, x: { grid: { display: false } } }
+    }
+  });
+}
+
+function renderFinancialCompanyAnalysis() {
+  const companies = Array.isArray(enterprise.financial_company_analysis) ? enterprise.financial_company_analysis : [];
+  const table = document.getElementById('financial-company-rows');
+  const select = document.getElementById('financial-company-select');
+  if (!companies.length) {
+    table.innerHTML = '<tr><td colspan="6">금융회사별 집계 데이터가 없습니다. 최신 분석을 실행해 주세요.</td></tr>';
+    select.innerHTML = '<option value="">금융회사 데이터 없음</option>';
+    return;
+  }
+
+  const latestMonth = String(data.analysis_month || '');
+  const ranked = companies.map(item => ({
+    ...item,
+    current: getDimensionMonth(item.monthly_sales, latestMonth),
+    previous: getPreviousDimensionMonth(item.monthly_sales, latestMonth)
+  })).sort((a, b) => number(b.current?.approval_amount) - number(a.current?.approval_amount)
+      || String(a.financial_company).localeCompare(String(b.financial_company), 'ko'));
+  const totalAmount = ranked.reduce((sum, item) => sum + number(item.current?.approval_amount), 0);
+
+  table.innerHTML = ranked.map(item => {
+    const amount = number(item.current?.approval_amount);
+    const count = number(item.current?.approval_count);
+    const share = totalAmount > 0 ? amount / totalAmount * 100 : 0;
+    return `<tr><td>${esc(item.financial_company)}</td><td>${money(amount)}</td><td>${share.toFixed(1)}%</td><td>${formatRate(compareDimension(item.current, item.previous, 'approval_amount'))}</td><td>${fmt.format(count)}</td><td>${formatRate(compareDimension(item.current, item.previous, 'approval_count'))}</td></tr>`;
+  }).join('');
+
+  if (window.Chart) {
+    const topTen = ranked.slice(0, 10).reverse();
+    if (financialCompanyChart) financialCompanyChart.destroy();
+    financialCompanyChart = new Chart(document.getElementById('financial-company-chart'), {
+      type: 'bar',
+      data: { labels: topTen.map(item => item.financial_company), datasets: [{
+        label: '승인금액', data: topTen.map(item => number(item.current?.approval_amount)),
+        backgroundColor: '#e7ad05', borderRadius: 4, maxBarThickness: 22
+      }] },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => money(c.raw) } } },
+        scales: { x: { beginAtZero: true, ticks: { callback: v => fmt.format(v) }, grid: { color: '#eff0f3' } }, y: { grid: { display: false } } }
+      }
+    });
+  }
+
+  select.innerHTML = ranked.map(item => `<option value="${esc(item.financial_company)}">${esc(item.financial_company)}</option>`).join('');
+  select.onchange = () => renderFinancialCompanyTrend(ranked, select.value);
+  renderFinancialCompanyTrend(ranked, select.value || ranked[0].financial_company);
+}
+
+function renderFinancialCompanyTrend(ranked, selectedName) {
+  const item = ranked.find(company => String(company.financial_company) === String(selectedName));
+  if (!item || !window.Chart) return;
+  if (financialTrendChart) financialTrendChart.destroy();
+  const history = item.monthly_sales || [];
+  financialTrendChart = new Chart(document.getElementById('financial-trend-chart'), {
+    type: 'line',
+    data: { labels: history.map(row => row.month), datasets: [{
+      label: `${item.financial_company} 승인금액`, data: history.map(row => number(row.approval_amount)),
+      borderColor: '#4977c9', backgroundColor: 'rgba(73,119,201,.12)',
+      fill: true, tension: .28, pointRadius: 3, pointBackgroundColor: '#4977c9'
+    }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => money(c.raw) } } },
+      scales: { y: { beginAtZero: true, ticks: { callback: v => fmt.format(v) }, grid: { color: '#eff0f3' } }, x: { grid: { display: false } } }
+    }
+  });
+}
+
+function getDimensionMonth(history, month) {
+  const rows = Array.isArray(history) ? history : [];
+  return rows.find(row => String(row.month) === month) || rows[rows.length - 1] || null;
+}
+function getPreviousDimensionMonth(history, month) {
+  const rows = Array.isArray(history) ? history : [];
+  const index = rows.findIndex(row => String(row.month) === month);
+  return index > 0 ? rows[index - 1] : null;
+}
+function compareDimension(current, previous, key) {
+  if (!current || !previous) return null;
+  const currentValue = number(current[key]);
+  const previousValue = number(previous[key]);
+  if (previousValue === 0) return currentValue === 0 ? 0 : null;
+  return (currentValue - previousValue) / previousValue * 100;
+}
+function number(value) {
+  const result = Number(value ?? 0);
+  return Number.isFinite(result) ? result : 0;
 }
 
 function formatRate(value) {

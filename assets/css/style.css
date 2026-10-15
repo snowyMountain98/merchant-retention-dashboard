@@ -29,3 +29,21 @@ td small{display:inline-block;margin-top:4px;color:#858b96;font-size:10px;font-w
 .ai-contact p{margin:0;color:#3b5147;font-size:12px;line-height:1.85;white-space:pre-line}
 .ai-cell-summary{display:block;max-width:220px;margin-top:5px;color:#16815b;font-size:10px;font-weight:500;line-height:1.5;white-space:normal}
 @media(max-width:700px){.ai-columns{grid-template-columns:1fr}.ai-panel{padding:15px}}
+
+/* Enterprise detail: payment method and financial company breakdowns */
+.breakdown-panel{margin-top:18px}
+.analysis-grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;margin-bottom:18px}
+.analysis-card{min-width:0;border:1px solid var(--line);border-radius:11px;padding:16px;background:#fff}
+.analysis-card h3,.analysis-table-heading h3{margin:0 0 12px;font-size:13px;letter-spacing:-.2px}
+.analysis-card .chart-wrap{height:270px}
+.analysis-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.analysis-card-head h3{margin:0}
+.select-label{color:var(--muted);font-size:11px;font-weight:600}
+.analysis-select{max-width:100%;min-width:150px;border:1px solid #e3e5e9;background:#fff;border-radius:8px;padding:8px 10px;color:var(--ink);font:inherit;font-size:11px;outline:none}
+.analysis-select:focus{border-color:var(--yellow)}
+.analysis-table-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:6px 0 12px}
+.analysis-table-heading h3{margin:0}
+.analysis-table-heading p{margin:0;color:var(--muted);font-size:11px}
+.breakdown-panel table{min-width:580px}
+@media(max-width:1000px){.analysis-grid{grid-template-columns:1fr}.analysis-card .chart-wrap{height:250px}}
+@media(max-width:700px){.analysis-card{padding:12px}.analysis-card .chart-wrap{height:230px}.analysis-table-heading{flex-direction:column}.analysis-card-head{align-items:flex-start}.analysis-select{width:100%}}

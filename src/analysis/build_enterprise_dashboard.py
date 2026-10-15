@@ -25,6 +25,8 @@ COMPANY_ID = "기업관리번호"
 COMPANY_NAME = "기업명"
 MONTH_COL = "집계년월"
 DATE_COL = "집계년월일"
+PAYMENT_METHOD_COL = "결제수단"
+FINANCIAL_COMPANY_COL = "금융회사"
 NUMERIC_COLUMNS = {
     "approval_count": "승인건수",
     "approval_amount": "승인금액",
@@ -33,7 +35,7 @@ NUMERIC_COLUMNS = {
     "partial_cancel_count": "부분취소건수",
     "partial_cancel_amount": "부분취소금액",
 }
-REQUIRED_COLUMNS = {COMPANY_ID, COMPANY_NAME, MONTH_COL, DATE_COL, "승인건수", "승인금액"}
+REQUIRED_COLUMNS = {COMPANY_ID, COMPANY_NAME, MONTH_COL, DATE_COL, PAYMENT_METHOD_COL, FINANCIAL_COMPANY_COL, "승인건수", "승인금액"}
 FEATURES = [
     "sales_drop_pct", "transaction_drop_pct", "sales_below_3m_pct",
     "transactions_below_3m_pct", "cancel_ratio", "partial_cancel_ratio",
@@ -236,6 +238,41 @@ def _score_enterprises(training: pd.DataFrame, current: pd.DataFrame) -> tuple[l
     }
 
 
+def _dimension_analysis(
+    aggregates: pd.DataFrame,
+    enterprise_id: str,
+    dimension_column: str,
+    output_label: str,
+    history_months: list[str],
+) -> list[dict[str, Any]]:
+    """Create enterprise-only month series for each payment dimension.
+
+    A dimension-month absent from transaction rows is filled with zero because the
+    source is a transaction activity extract and absence means no payment activity.
+    """
+    subset = aggregates.loc[aggregates["enterprise_id"].astype(str).eq(str(enterprise_id))]
+    output: list[dict[str, Any]] = []
+    if subset.empty:
+        return output
+    for dimension_value, group in subset.groupby(dimension_column, dropna=False):
+        by_month = {str(row["base_month"]): row for _, row in group.iterrows()}
+        monthly_sales: list[dict[str, Any]] = []
+        for month in history_months:
+            row = by_month.get(month)
+            item: dict[str, Any] = {"month": month}
+            for metric in NUMERIC_COLUMNS:
+                item[metric] = _json_num(row[metric]) if row is not None else 0
+            monthly_sales.append(item)
+        output.append({output_label: str(dimension_value), "monthly_sales": monthly_sales})
+    output.sort(
+        key=lambda item: (
+            -float(item["monthly_sales"][-1]["approval_amount"] if item["monthly_sales"] else 0),
+            str(item[output_label]),
+        )
+    )
+    return output
+
+
 def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
     source = Path(input_path)
     if not source.is_file():
@@ -268,6 +305,21 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
             blank_counts[source_col] = len(df)
         else:
             df[target], blank_counts[source_col] = _number_series(df[source_col], source_col)
+
+    # Only aggregated dimensions are emitted to the website: no merchant-level rows.
+    # Blank dimension labels are made explicit so amounts are not silently omitted.
+    df["payment_method"] = (
+        df[PAYMENT_METHOD_COL].astype("string").fillna("").str.strip().replace("", "미분류")
+    )
+    df["financial_company"] = (
+        df[FINANCIAL_COMPANY_COL].astype("string").fillna("").str.strip().replace("", "미분류 금융회사")
+    )
+    payment_method_aggregates = df.groupby(
+        ["enterprise_id", "payment_method", "base_month"], as_index=False
+    )[list(NUMERIC_COLUMNS)].sum()
+    financial_company_aggregates = df.groupby(
+        ["enterprise_id", "financial_company", "base_month"], as_index=False
+    )[list(NUMERIC_COLUMNS)].sum()
 
     observed_monthly = df.groupby(
         ["enterprise_id", "enterprise_name", "base_month"], as_index=False
@@ -368,6 +420,13 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
              "partial_cancel_count": _json_num(row["partial_cancel_count"])}
             for _, row in history.iterrows()
         ]
+        history_months = [str(value) for value in history["base_month"].tolist()]
+        payment_method_analysis = _dimension_analysis(
+            payment_method_aggregates, enterprise_id, "payment_method", "payment_method", history_months
+        )
+        financial_company_analysis = _dimension_analysis(
+            financial_company_aggregates, enterprise_id, "financial_company", "financial_company", history_months
+        )
         enterprise_rows.append({
             "enterprise_id": enterprise_id,
             "enterprise_name": names[enterprise_id],
@@ -385,6 +444,8 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
             "previous_approval_count": _json_num(info.get("previous_approval_count", 0) or 0),
             "risk_reasons": reasons,
             "monthly_sales": history_json,
+            "payment_method_analysis": payment_method_analysis,
+            "financial_company_analysis": financial_company_analysis,
         })
 
     ordering = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3}
@@ -408,9 +469,10 @@ def build_enterprise_dashboard(input_path: str | Path) -> dict[str, Any]:
         "source_date_from": pd.Timestamp(df["base_date"].min()).strftime("%Y-%m-%d"),
         "source_date_to": latest_date.strftime("%Y-%m-%d"),
         "method": "enterprise_month_isolation_forest_v2_zero_fill",
+        "dimension_aggregation_policy": "Monthly enterprise aggregates are additionally grouped by payment method and financial company; absent enterprise-dimension-month rows are zero-filled.",
         "zero_fill_policy": "An absent enterprise-month record is interpreted as 0 approval amount and 0 approval count (no payments), not missing data.",
         "model_info": model_info,
-        "notice": "기업별 월간 집계만 분석했습니다. 원본에 특정 기업의 월별 행이 없으면 해당 월 승인금액과 승인건수를 0으로 처리했습니다(결제 없음). 개별 가맹점 분석은 수행하거나 공개하지 않습니다. Isolation Forest 점수는 기업 거래 패턴 대비 이상징후 상대 점수이며 이탈 확률이 아닙니다. 외부 원인은 별도 근거가 있는 경우에만 추가 검토해야 합니다.",
+        "notice": "기업 단위 월간 집계와 결제수단(카드/계좌)·금융회사별 집계만 분석했습니다. 기업/결제수단/금융회사 기준으로 특정 월에 거래 행이 없으면 해당 월 승인금액과 승인건수를 0으로 처리했습니다(결제 없음). 개별 가맹점 분석은 수행하거나 공개하지 않습니다. Isolation Forest 점수는 기업 거래 패턴 대비 이상징후 상대 점수이며 이탈 확률이 아닙니다. 외부 원인은 별도 근거가 있는 경우에만 추가 검토해야 합니다.",
         "numeric_blank_counts": blank_counts,
         "summary": summary,
         "enterprises": enterprise_rows,
