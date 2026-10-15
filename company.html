@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>기업별 AI 매출 분석</title>
   <link rel="stylesheet" href="assets/css/style.css">
-  <link rel="stylesheet" href="assets/css/company-evidence.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script defer src="assets/js/company-detail.js"></script>
 </head>
@@ -15,7 +14,7 @@
     <p class="nav-label">WORKSPACE</p>
     <a class="nav-item" href="index.html">▦　기업별 현황</a>
     <a class="nav-item active" href="#company-summary">◉　기업 분석</a>
-    <div class="sidebar-foot">OPENAI · NAVER EVIDENCE</div>
+    <div class="sidebar-foot">OPENAI INSIGHTS</div>
   </aside>
   <main class="main">
     <a class="back-link" href="index.html">← 기업 목록으로</a>
@@ -41,12 +40,6 @@
     <section class="panel">
       <div class="panel-head"><div><h2>월별 실적 및 변동</h2><p>승인금액과 승인건수의 기업 단위 합계</p></div></div>
       <div class="table-scroll"><table><thead><tr><th>집계월</th><th>승인금액</th><th>전월 대비</th><th>승인건수</th><th>건수 증감</th></tr></thead><tbody id="monthly-rows"><tr><td colspan="5">데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
-    </section>
-    <section class="panel evidence-panel" id="news-evidence-panel" hidden>
-      <div class="panel-head"><div><h2><span class="news-mark">N</span> 월별 매출 변화 근거 검색</h2><p>기업관리번호 1999에 한해 네이버 뉴스 검색 API 결과를 제공합니다.</p></div><span class="mini-tag">NAVER NEWS</span></div>
-      <div class="evidence-intro" id="evidence-intro">월별 근거를 불러오는 중입니다.</div>
-      <div id="monthly-evidence-list" class="monthly-evidence-list"></div>
-      <p class="ai-limitation">기사 제목·요약은 검색 결과의 정황 증거입니다. 기사와 내부 승인금액은 측정 기준이 다를 수 있으며, 시간상 함께 나타났다는 사실만으로 인과관계가 확정되지는 않습니다.</p>
     </section>
     <footer>Enterprise Retention Dashboard · Company-level analysis only</footer>
   </main>

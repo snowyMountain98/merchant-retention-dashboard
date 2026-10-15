@@ -3,12 +3,12 @@ import pandas as pd
 from src.analysis.build_enterprise_dashboard import build_enterprise_dashboard
 
 
-def test_builds_only_enterprise_level_output(tmp_path):
+def test_builds_only_enterprise_level_output_and_preserves_masked_names(tmp_path):
     rows = []
     values = {
-        "2026-05": [("1999", "Starbucks", 1000, 10), ("2000", "Masked Corp", 2000, 20)],
-        "2026-06": [("1999", "Starbucks", 800, 8), ("2000", "Masked Corp", 2100, 21)],
-        "2026-07": [("1999", "Starbucks", 700, 7), ("2000", "Masked Corp", 2000, 20)],
+        "2026-05": [("1999", "마스킹기업 A", 1000, 10), ("2000", "마스킹기업 B", 2000, 20)],
+        "2026-06": [("1999", "마스킹기업 A", 800, 8), ("2000", "마스킹기업 B", 2100, 21)],
+        "2026-07": [("1999", "마스킹기업 A", 700, 7), ("2000", "마스킹기업 B", 2000, 20)],
     }
     for month, entries in values.items():
         date = month.replace("-", "") + "15"
@@ -33,7 +33,8 @@ def test_builds_only_enterprise_level_output(tmp_path):
     assert len(result["enterprises"]) == 2
     assert "merchants" not in result
     target = next(e for e in result["enterprises"] if e["enterprise_id"] == "1999")
-    assert target["display_name"] == "스타벅스"
+    assert target["enterprise_name"] == "마스킹기업 A"
+    assert target["display_name"] == "마스킹기업 A"
     assert target["monthly_sales"][-1]["approval_amount"] == 700
     assert target["sales_change_rate"] == -12.5
     assert all("merchant_id" not in row and "merchant_name" not in row for row in result["enterprises"])

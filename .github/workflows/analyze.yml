@@ -42,15 +42,6 @@ jobs:
           --input "스타플랫폼거래집계.xlsx"
           --output public-data/dashboard_summary.json
 
-      - name: Search monthly news evidence for enterprise 1999 only
-        env:
-          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
-          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-        run: >-
-          python src/analysis/generate_naver_evidence.py
-          --input public-data/dashboard_summary.json
-          --output public-data/dashboard_summary.json
-
       - name: Generate OpenAI enterprise-only insights
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -60,7 +51,7 @@ jobs:
           --input public-data/dashboard_summary.json
           --output public-data/dashboard_summary.json
 
-      - name: Remove all individual merchant records from the public data
+      - name: Remove individual merchant records and verify masked enterprise names
         run: |
           python - <<'PY'
           import json
@@ -68,35 +59,29 @@ jobs:
           path = Path('public-data/dashboard_summary.json')
           data = json.loads(path.read_text(encoding='utf-8'))
           data.pop('merchants', None)
-          summary = data.get('summary', {})
-          for key in ('merchant_count', 'latest_month_observed_count', 'high_risk_count', 'medium_risk_count', 'low_risk_count', 'unknown_count'):
-              summary.pop(key, None)
+          for enterprise in data.get('enterprises', []):
+              # Always present the original masked enterprise name from the source data.
+              enterprise['display_name'] = enterprise.get('enterprise_name', '')
           path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
           assert 'merchants' not in data
-          print('Public JSON is enterprise-only; individual merchant records removed.')
+          assert all(e.get('display_name') == e.get('enterprise_name') for e in data.get('enterprises', []))
+          print('Pages data check passed: enterprise-only output and original masked names.')
           PY
 
-      - name: Assemble enterprise-only Pages site without the source workbook
+      - name: Assemble enterprise-only Pages site without source workbook or search assets
         run: |
           rm -rf site
           mkdir -p site/assets/css site/assets/js site/public-data
           cp index.html site/index.html
           cp company.html site/company.html
           cp assets/css/style.css site/assets/css/style.css
-          cp assets/css/company-evidence.css site/assets/css/company-evidence.css
           cp assets/js/dashboard.js site/assets/js/dashboard.js
           cp assets/js/company-detail.js site/assets/js/company-detail.js
           cp public-data/dashboard_summary.json site/public-data/dashboard_summary.json
           test ! -e site/스타플랫폼거래집계.xlsx
           test ! -e site/merchant-detail.html
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('site/public-data/dashboard_summary.json').read_text(encoding='utf-8'))
-          assert 'merchants' not in data
-          assert all('monthly_change_evidence' not in e or str(e.get('enterprise_id')) == '1999' for e in data.get('enterprises', []))
-          print('Pages artifact check passed: enterprise-level data only; Naver evidence scoped to enterprise 1999.')
-          PY
+          test ! -e site/assets/css/company-evidence.css
+          test ! -e site/src/analysis/generate_naver_evidence.py
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
